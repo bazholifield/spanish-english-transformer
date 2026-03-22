@@ -1,0 +1,13 @@
+# Environments
+venv/
+.env
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+
+# Data and Models
+data/
+models/*.pt
+checkpoints/*.pt
+checkpoints/*.pth

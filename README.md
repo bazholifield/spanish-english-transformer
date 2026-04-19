@@ -2,7 +2,7 @@
 
 A PyTorch implementation of a Seq2Seq Transformer model for machine translation, trained on the Europarl-v7 corpus.
 
-This project is currently in the architectural phase. The training scripts and data pipelines are implemented, but full model training is pending due to internet constraints.
+I started putting this project together in conjunction with an online course in transformer-based MT models. I have been able to put the architecture together and the training scripts and data pipelines are implemented, but full model training is pending due to internet constraints.
 
 ## Project Structure
 * `src/`: Core logic (Architecture, Tokenizer, Training loop).
@@ -11,7 +11,7 @@ This project is currently in the architectural phase. The training scripts and d
 * `checkpoints/`: Where the best weights are saved.
 * `main.py`: The entry point for starting training.
 
-## Status
+## Steps
 - [x] Transformer Architecture (Encoder/Decoder)
 - [x] SentencePiece BPE Tokenization Pipeline
 - [x] Data Cleaning & Filtering Scripts

@@ -2,7 +2,7 @@
 
 A sequence-to-sequence Transformer model for Spanish-to-English translation, built from scratch in PyTorch. I started this project alongside an online course on transformer-based MT models, since I wanted to actually build one of my own rather than just follow along. I picked Spanish and English since I speak both reasonably well, which makes it easier to check the outputs.
 
-Still a work in progress, but it's producing real translations and I plan to keep improving it.
+Trained baseline achieving 22.29 BLEU. Still a work in progress, but it's producing real translations and I plan to keep improving it.
 
 ---
 

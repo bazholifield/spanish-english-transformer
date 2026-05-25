@@ -85,7 +85,7 @@ These are from the most recent training run (BLEU 22.29). I picked sentences to 
 ES: Es importante garantizar los derechos fundamentales de todos los ciudadanos.
 EN: It is important that we need to have the rights of our citizens.
 ```
-Not a bad first clause. Falls apart after that, but the core meaning is there.
+The general meaning is present, but missing specifics. It falls apart after this first sentence, but this example shows promise.
 
 **Personal/colloquial — completely off:**
 ```
@@ -99,7 +99,7 @@ The model has no idea what to do with everyday language, so it just defaults to 
 ES: Cuando era pequeña, mi abuela me contaba historias cada noche.
 EN: In my opinion, I would like to say that it is a great deal of the same time.
 ```
-Drops the childhood memory entirely and hallucinates a parliamentary opinion statement. The imperfect tense and first-person personal context are essentially out-of-distribution.
+Drops the actual meaning entirely and hallucinates a parliamentary opinion statement. The imperfect tense and first-person personal context are essentially out-of-distribution.
 
 **Long sentence — degrades mid-way:**
 ```

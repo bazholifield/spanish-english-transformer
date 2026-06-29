@@ -1,6 +1,6 @@
 import torch
 from torch.utils.data import Dataset, DataLoader
-from tokenizer import SPTokenizer
+from .tokenizer import SPTokenizer
 from typing import List
 
 # Dataset + collate

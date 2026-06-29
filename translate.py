@@ -9,7 +9,7 @@ def translate():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Load tokenizer
-    sp = SPTokenizer("models/spm_shared.model")
+    sp = SPTokenizer(os.path.join("models", "models", "spm_shared.model"))
     src_tok = tgt_tok = sp 
 
     # Initialize and load model (check hyperparameters - same as training loop!)
@@ -21,8 +21,7 @@ def translate():
         pad_idx=src_tok.id_pad
     ).to(device)
 
-    # Load weights from training run
-    checkpoint_path = "best_transformer.pt"
+    checkpoint_path = os.path.join("models", "models", "best_transformer.pt")
     if os.path.exists(checkpoint_path):
         checkpoint = torch.load(checkpoint_path, map_location=device)
         model.load_state_dict(checkpoint['model_state'])

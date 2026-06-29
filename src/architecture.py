@@ -1,4 +1,4 @@
-from utils import create_transformer_masks
+from .utils import create_transformer_masks
 import torch
 import math
 import torch.nn as nn

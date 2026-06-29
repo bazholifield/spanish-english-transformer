@@ -12,10 +12,9 @@ def load_parallel_corpus(en_path, es_path):
     return en_lines, es_lines
 
 def main():
-    DATA_DIR = "data"
-    EN_FILE = os.path.join(DATA_DIR, "all_en.txt")
-    ES_FILE = os.path.join(DATA_DIR, "all_es.txt")
-    SPM_MODEL = os.path.join("models", "spm_shared.model")
+    EN_FILE = os.path.join("data", "data", "processed", "all_en.txt")
+    ES_FILE = os.path.join("data", "data", "processed", "all_es.txt")
+    SPM_MODEL = os.path.join("models", "models", "spm_shared.model")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
@@ -24,7 +23,7 @@ def main():
     if not os.path.exists(EN_FILE) or not os.path.exists(ES_FILE):
         raise FileNotFoundError(
             f"Missing data files: {EN_FILE} or {ES_FILE}. "
-            "Please ensure your text data is in the 'data/' folder."
+            "Please ensure your text data is in the 'data/data/processed/' folder."
         )
     
     full_en, full_es = load_parallel_corpus(EN_FILE, ES_FILE)

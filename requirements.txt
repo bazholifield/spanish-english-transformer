@@ -2,5 +2,3 @@ torch
 torchvision
 sentencepiece
 sacrebleu
-typing
-pathlib

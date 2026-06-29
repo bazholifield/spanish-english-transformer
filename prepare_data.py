@@ -2,18 +2,21 @@ import sentencepiece as spm
 import os
 
 def train_tokenizer():
-    input_files = "data/processed/all_es.txt,data/processed/all_en.txt"
-    model_prefix = "models/spm_shared"
+    processed_dir = os.path.join("data", "data", "processed")
+    es_file = os.path.join(processed_dir, "all_es.txt")
+    en_file = os.path.join(processed_dir, "all_en.txt")
+    model_prefix = os.path.join("models", "models", "spm_shared")
 
-    if not os.path.exists("data/processed/all_es.txt"):
-        print("Error: data/all_es.txt not found.")
+    if not os.path.exists(es_file):
+        print(f"Error: {es_file} not found.")
         return
 
+    os.makedirs(os.path.dirname(model_prefix), exist_ok=True)
+
     print("Training SentencePiece model...")
-    
-    # training run
+
     spm.SentencePieceTrainer.train(
-        input=input_files,
+        input=f"{es_file},{en_file}",
         model_prefix=model_prefix,
         vocab_size=16000,
         model_type='bpe',
@@ -22,7 +25,7 @@ def train_tokenizer():
         shuffle_input_sentence=True,
         user_defined_symbols="<pad>,<s>,</s>"
     )
-    
+
     print(f"Tokenizer trained! Files saved to {model_prefix}.model and .vocab")
 
 if __name__ == "__main__":

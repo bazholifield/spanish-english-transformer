@@ -27,6 +27,8 @@ dropout: 0.1
 epochs: 20
 batch_size: 64
 warmup_steps: 8000
+lr_scale: 0.5                 # halves the Noam peak (5e-4 → 2.5e-4); run 1 diverged at full scale in epoch 11
+early_stop_patience: 3        # stop after 3 epochs without a better validation loss
 label_smoothing: 0.1
 bleu_every: 2                 # greedy BLEU on validation sentences every N epochs (the live curve)
 bleu_sentences: 300

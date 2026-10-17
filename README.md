@@ -1,8 +1,8 @@
 # Spanish → English Neural Machine Translator
 
-A sequence-to-sequence Transformer model for Spanish-to-English translation, built from scratch in PyTorch. I started this project alongside an online course on transformer-based MT models, since I wanted to actually build one of my own rather than just follow along. I picked Spanish and English since I speak both reasonably well, which makes it easier to check the outputs.
+A sequence-to-sequence Transformer model for Spanish-to-English translation, built from scratch in PyTorch. I started working on this project in 2024 while working through an online course on transformer-based MT models, since I wanted to try to build one of my own rather than just follow along. I picked Spanish and English since I speak both reasonably well, which makes it easier to check the outputs.
 
-Trained baseline achieving 22.29 BLEU. Still a work in progress, but it's producing real translations and I plan to keep improving it.
+Trained baseline achieving 22.29 BLEU. Still a work in progress, but it's producing solid translations and I plan to keep improving it.
 
 ---
 
@@ -116,7 +116,7 @@ The most Europarl-sounding of the inputs, but it still drifts, it picks up a few
 
 ## Current limitations
 
-The model was trained exclusively on Europarl (EU parliamentary proceedings), so it has a strong bias toward formal, political-sounding output regardless of input. Translations of everyday sentences work grammatically but tend to come out sounding like a European Parliament speech. More diverse training data would help a lot here.
+The model was trained on Europarl (EU parliamentary proceedings), so it has a strong bias toward very formal, political-sounding translations regardless of input. Translations of everyday sentences work grammatically but tend to come out sounding like a European Parliament speech. More diverse training data would help a lot here.
 
 ---
 

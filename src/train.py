@@ -6,7 +6,13 @@ from torch.utils.data import DataLoader
 from .architecture import TransformerSeq2Seq
 from .tokenizer import SPTokenizer
 from .dataset import Seq2SeqDataset, collate_fn
-from .utils import shift_right
+
+def teacher_forcing(tgt_batch):
+    """Split encoded targets [<s>, w1 … wn, </s>] into decoder input [<s>, w1 … wn] and labels
+    [w1 … wn, </s>]. (shift_right on the full target fed <s>, <s> and taught the model to predict
+    <s> first, so it never started a sentence on its own.)"""
+    return tgt_batch[:, :-1], tgt_batch[:, 1:]
+
 
 def train_epoch(model, dataloader, optimizer, criterion, device, tgt_bos_id, scaler, scheduler=None):
     model.train()
@@ -16,13 +22,13 @@ def train_epoch(model, dataloader, optimizer, criterion, device, tgt_bos_id, sca
         tgt_batch = tgt_batch.to(device)
         optimizer.zero_grad()
 
-        decoder_input = shift_right(tgt_batch, tgt_bos_id)
+        decoder_input, labels = teacher_forcing(tgt_batch)
 
         with torch.cuda.amp.autocast():
             logits = model(src_batch, decoder_input)
             V = logits.size(-1)
-            logits_flat = logits.view(-1, V)
-            tgt_flat = tgt_batch.view(-1)
+            logits_flat = logits.reshape(-1, V)
+            tgt_flat = labels.reshape(-1)
             loss = criterion(logits_flat, tgt_flat)
 
         scaler.scale(loss).backward()
@@ -47,11 +53,11 @@ def evaluate(model, dataloader, criterion, device, tgt_bos_id):
         for src_batch, tgt_batch in dataloader:
             src_batch = src_batch.to(device)
             tgt_batch = tgt_batch.to(device)
-            decoder_input = shift_right(tgt_batch, tgt_bos_id)
+            decoder_input, labels = teacher_forcing(tgt_batch)
             logits = model(src_batch, decoder_input)
             V = logits.size(-1)
-            logits_flat = logits.view(-1, V)
-            tgt_flat = tgt_batch.view(-1)
+            logits_flat = logits.reshape(-1, V)
+            tgt_flat = labels.reshape(-1)
             loss = criterion(logits_flat, tgt_flat)
             total_loss += loss.item()
     return total_loss / len(dataloader)
@@ -68,6 +74,8 @@ DEFAULTS = {
     "d_model": 512, "nhead": 8, "num_encoder_layers": 6, "num_decoder_layers": 6,
     "dim_feedforward": 2048, "dropout": 0.05, "batch_size": 64, "epochs": 40,
     "warmup_steps": 8000, "label_smoothing": 0.1, "bleu_every": 0, "bleu_sentences": 200,
+    "lr_scale": 1.0,             # multiplies the whole Noam schedule (0.5 halves the peak)
+    "early_stop_patience": 0,    # stop after N epochs without a new best val loss (0 = never)
     "save_dir": os.path.join("models", "models"),
 }
 
@@ -86,7 +94,9 @@ def greedy_batch(model, sentences, tok, device, max_len=None, batch_size=64):
         gen = torch.full((len(chunk), 1), tok.id_bos, dtype=torch.long, device=device)
         limit = max_len or (2 * src.size(1) + 10)
         for _ in range(limit):
-            nxt = model(src, gen)[:, -1].argmax(-1, keepdim=True)
+            logits = model(src, gen)[:, -1]
+            logits[:, [tok.id_bos, tok.id_pad]] = float("-inf")  # never valid as output tokens
+            nxt = logits.argmax(-1, keepdim=True)
             gen = torch.cat([gen, nxt], dim=1)
             if (gen == tok.id_eos).any(dim=1).all():
                 break
@@ -139,7 +149,7 @@ def run_training(src_sentences_train, tgt_sentences_train,
     def lr_lambda(step):
         warmup = cfg["warmup_steps"]
         step = max(step, 1)
-        return (1.0 / math.sqrt(cfg["d_model"])) * min(1.0 / math.sqrt(step), step * (warmup ** -1.5))
+        return cfg["lr_scale"] * (1.0 / math.sqrt(cfg["d_model"])) * min(1.0 / math.sqrt(step), step * (warmup ** -1.5))
 
     scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
@@ -154,6 +164,7 @@ def run_training(src_sentences_train, tgt_sentences_train,
     emit({"event": "start", "max_steps": N_EPOCHS * steps_per_epoch, "epochs": N_EPOCHS, "batch_size": BATCH,
           "device": str(device), "train_pairs": len(train_ds), "val_pairs": len(val_ds)})
     best_val = float('inf')
+    stale = 0  # epochs since the last new best
     for epoch in range(1, N_EPOCHS + 1):
         t0 = time.time()
         train_loss = train_epoch(model, train_loader, optimizer, criterion, device, bos_idx, scaler, scheduler)
@@ -172,6 +183,13 @@ def run_training(src_sentences_train, tgt_sentences_train,
             print(f"  val BLEU ({n} sentences, greedy): {record['eval_bleu']:.2f}")
         emit(record)
 
+        if not (math.isfinite(train_loss) and math.isfinite(val_loss)):
+            # Diverged (fp16 overflow / too high a learning rate). Every later epoch would be NaN
+            # too, so stop here; the best checkpoint saved so far is untouched.
+            print(f" ! Loss is not finite at epoch {epoch}; stopping. Best val loss was {best_val:.4f}.")
+            emit({"event": "diverged", "step": step, "epoch": epoch})
+            break
+
         if val_loss < best_val:
             best_val = val_loss
             checkpoint_data = {
@@ -182,9 +200,17 @@ def run_training(src_sentences_train, tgt_sentences_train,
                 # Everything inference needs to rebuild this model exactly:
                 'special_ids': {'pad': pad_idx, 'bos': bos_idx, 'eos': eos_idx},
                 'arch': arch,
+                'decoder_input': 'standard',  # [<s>, w1 …] → [w1 …, </s>]; decode from [<s>]
             }
             torch.save(checkpoint_data, save_path)
             print(f" > New best model saved to {save_path} (Val Loss: {val_loss:.4f})")
             emit({"event": "checkpoint", "step": step, "best": save_path})
+            stale = 0
+        else:
+            stale += 1
+            if cfg["early_stop_patience"] and stale >= cfg["early_stop_patience"]:
+                print(f" > No improvement for {stale} epochs; stopping early (best val loss {best_val:.4f}).")
+                emit({"event": "early_stop", "step": step, "epoch": epoch})
+                break
 
     return model, src_tok, tgt_tok

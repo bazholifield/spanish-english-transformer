@@ -1,0 +1,34 @@
+# Retrain with the special-token fix (start=1, end=2, pad=3) and much more data.
+#   python main.py --config configs/retrain.yaml      (or Training → New run in the Helm)
+# Estimated time on a Colab T4: ~1.5 h (the README's run: 38k pairs × 35 epochs ≈ 52 min).
+
+# --- data: built from the raw Europarl files at the start of the run ---
+raw_dir: data/data/raw        # the Helm points Colab runs at Drive › Helm/datasets/europarl-es-en
+max_lines: 200000             # raw lines read → ~104k pairs (clean.py's 20,000 → 7,659)
+max_chars: 150                # drop sentences longer than this on either side
+val_fraction: 0.03            # ~3k pairs to watch for overfitting
+test_size: 1000               # held out, never trained on; saved with the model for Sea trials
+seed: 42
+
+# --- tokenizer ---
+retrain_tokenizer: true       # train a fresh 16k BPE on this run's training split
+vocab_size: 16000
+tokenizer: models/models/spm_shared.model   # used only when retrain_tokenizer is false
+
+# --- model (same shape as the original) ---
+d_model: 512
+nhead: 8
+num_encoder_layers: 6
+num_decoder_layers: 6
+dim_feedforward: 2048
+dropout: 0.1
+
+# --- training ---
+epochs: 20
+batch_size: 64
+warmup_steps: 8000
+label_smoothing: 0.1
+bleu_every: 2                 # greedy BLEU on validation sentences every N epochs (the live curve)
+bleu_sentences: 300
+
+output_dir: runs/local        # replaced by the Helm with the run's own folder

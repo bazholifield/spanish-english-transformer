@@ -76,6 +76,9 @@ DEFAULTS = {
     "warmup_steps": 8000, "label_smoothing": 0.1, "bleu_every": 0, "bleu_sentences": 200,
     "lr_scale": 1.0,             # multiplies the whole Noam schedule (0.5 halves the peak)
     "early_stop_patience": 0,    # stop after N epochs without a new best val loss (0 = never)
+    "norm_first": False,         # Pre-LayerNorm transformer (more stable; new runs only)
+    "spike_factor": 0.0,         # val loss > best × this (or NaN) → roll back to the best checkpoint (0 = off)
+    "max_rollbacks": 3,          # give up after this many rollbacks
     "save_dir": os.path.join("models", "models"),
 }
 
@@ -130,7 +133,8 @@ def run_training(src_sentences_train, tgt_sentences_train,
     tgt_vocab_size = tgt_tok.vocab_size()
     print("SRC vocab size:", src_vocab_size, "TGT vocab size:", tgt_vocab_size)
 
-    arch = {k: cfg[k] for k in ("d_model", "nhead", "num_encoder_layers", "num_decoder_layers", "dim_feedforward")}
+    arch = {k: cfg[k] for k in ("d_model", "nhead", "num_encoder_layers", "num_decoder_layers", "dim_feedforward",
+                                "norm_first")}
     print("Initializing model on CPU first for safety...")
     model = TransformerSeq2Seq(
         src_vocab_size=src_vocab_size,
@@ -146,10 +150,13 @@ def run_training(src_sentences_train, tgt_sentences_train,
 
     scaler = torch.cuda.amp.GradScaler()
 
+    lr_mult = [1.0]  # halved on every rollback; a list so lr_lambda sees the change
+
     def lr_lambda(step):
         warmup = cfg["warmup_steps"]
         step = max(step, 1)
-        return cfg["lr_scale"] * (1.0 / math.sqrt(cfg["d_model"])) * min(1.0 / math.sqrt(step), step * (warmup ** -1.5))
+        noam = (1.0 / math.sqrt(cfg["d_model"])) * min(1.0 / math.sqrt(step), step * (warmup ** -1.5))
+        return cfg["lr_scale"] * lr_mult[0] * noam
 
     scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
@@ -165,6 +172,7 @@ def run_training(src_sentences_train, tgt_sentences_train,
           "device": str(device), "train_pairs": len(train_ds), "val_pairs": len(val_ds)})
     best_val = float('inf')
     stale = 0  # epochs since the last new best
+    rollbacks = 0
     for epoch in range(1, N_EPOCHS + 1):
         t0 = time.time()
         train_loss = train_epoch(model, train_loader, optimizer, criterion, device, bos_idx, scaler, scheduler)
@@ -183,10 +191,29 @@ def run_training(src_sentences_train, tgt_sentences_train,
             print(f"  val BLEU ({n} sentences, greedy): {record['eval_bleu']:.2f}")
         emit(record)
 
-        if not (math.isfinite(train_loss) and math.isfinite(val_loss)):
-            # Diverged (fp16 overflow / too high a learning rate). Every later epoch would be NaN
-            # too, so stop here; the best checkpoint saved so far is untouched.
-            print(f" ! Loss is not finite at epoch {epoch}; stopping. Best val loss was {best_val:.4f}.")
+        finite = math.isfinite(train_loss) and math.isfinite(val_loss)
+        spiked = cfg["spike_factor"] and math.isfinite(best_val) and val_loss > best_val * cfg["spike_factor"]
+        if not finite or spiked:
+            # Diverged (fp16 overflow, a bad batch, too high a learning rate). The weights are damaged
+            # and rarely recover on their own, so restore the best checkpoint (model + optimizer) and
+            # continue at half the learning rate; after max_rollbacks, stop with the best model intact.
+            if cfg["spike_factor"] and rollbacks < cfg["max_rollbacks"] and os.path.exists(save_path):
+                rollbacks += 1
+                best = torch.load(save_path, map_location=device)
+                model.load_state_dict(best["model_state"])
+                optimizer.load_state_dict(best["optim_state"])
+                lr_mult[0] *= 0.5
+                scaler = torch.cuda.amp.GradScaler()
+                print(f" ! Val loss {val_loss:.4f} vs best {best_val:.4f} at epoch {epoch}: rolled back to epoch "
+                      f"{best['epoch']}, learning rate ×{lr_mult[0]:g} (rollback {rollbacks}/{cfg['max_rollbacks']}).")
+                emit({"event": "rollback", "step": step, "epoch": epoch, "to_epoch": best["epoch"], "lr_mult": lr_mult[0]})
+                stale += 1  # a rolled-back epoch is an epoch without improvement
+                if cfg["early_stop_patience"] and stale >= cfg["early_stop_patience"]:
+                    print(f" > No improvement for {stale} epochs; stopping early (best val loss {best_val:.4f}).")
+                    emit({"event": "early_stop", "step": step, "epoch": epoch})
+                    break
+                continue
+            print(f" ! Training diverged at epoch {epoch}; stopping. Best val loss was {best_val:.4f}.")
             emit({"event": "diverged", "step": step, "epoch": epoch})
             break
 

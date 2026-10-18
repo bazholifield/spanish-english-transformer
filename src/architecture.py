@@ -6,7 +6,7 @@ import torch.nn as nn
 # Pytorch transformer
 class TransformerSeq2Seq(nn.Module):
     def __init__(self, src_vocab_size, tgt_vocab_size, d_model=512, nhead=8, num_encoder_layers=6, num_decoder_layers=6,
-                 dim_feedforward=2048, dropout=0.1, pad_idx=0):
+                 dim_feedforward=2048, dropout=0.1, pad_idx=0, norm_first=False):
         super().__init__()
         self.model_type = "transformer"
         self.d_model = d_model
@@ -25,7 +25,10 @@ class TransformerSeq2Seq(nn.Module):
             num_encoder_layers=num_encoder_layers,
             num_decoder_layers=num_decoder_layers,
             dim_feedforward=dim_feedforward, dropout=dropout,
-            batch_first=True
+            batch_first=True,
+            # Pre-LayerNorm (normalise before each sublayer) is much more stable to train than the
+            # default post-LN, especially in fp16. Off by default so older checkpoints load as trained.
+            norm_first=norm_first
         )
 
         # Output layer

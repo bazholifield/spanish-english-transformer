@@ -1,6 +1,7 @@
 import argparse
 import os
 import random
+from pathlib import Path
 
 import torch
 
@@ -112,6 +113,29 @@ def load_config(path):
         return json.loads(text)
 
 
+def build_mix_pairs(cfg):
+    """A multi-domain mix (configs/mix-v1.yaml): the first max_pairs of each pool that
+    build_mix.py wrote to <data_root>/pools/. Pools are pre-shuffled, so "first N" is a sample."""
+    root, pairs, counts = cfg["data_root"], [], {}
+    for d in cfg["datasets"]:
+        with open(os.path.join(root, "pools", d["name"] + ".es"), encoding="utf-8") as f_es, \
+             open(os.path.join(root, "pools", d["name"] + ".en"), encoding="utf-8") as f_en:
+            chunk = [(es.rstrip("\n"), en.rstrip("\n")) for es, en, _ in zip(f_es, f_en, range(d["max_pairs"]))]
+        pairs += chunk
+        counts[d["name"]] = len(chunk)
+    return pairs, counts
+
+
+def load_eval_sets(root):
+    """The fixed per-domain evaluation sets: {domain: (spanish lines, english lines)}."""
+    sets = {}
+    for es_file in sorted(Path(root, "eval").glob("*.es")):
+        es = es_file.read_text(encoding="utf-8").splitlines()
+        en = es_file.with_suffix(".en").read_text(encoding="utf-8").splitlines()
+        sets[es_file.stem] = (es, en)
+    return sets
+
+
 def run_from_config(path):
     cfg = load_config(path)
     out_dir = cfg["output_dir"]
@@ -120,26 +144,42 @@ def run_from_config(path):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    pairs = build_pairs(cfg)
+    eval_sets = {}
+    if cfg.get("datasets"):
+        # Multi-domain mix: the test sets are the fixed per-domain eval sets, not cut from the data.
+        pairs, counts = build_mix_pairs(cfg)
+        eval_sets = load_eval_sets(cfg["data_root"])
+        n_test = 0
+        print("Mix:", ", ".join(f"{k} {v:,}" for k, v in counts.items()))
+    else:
+        pairs = build_pairs(cfg)
+        n_test = cfg["test_size"]
     random.seed(cfg["seed"])
     random.shuffle(pairs)
-    n_test, n_val = cfg["test_size"], int(len(pairs) * cfg["val_fraction"])
+    n_val = int(len(pairs) * cfg["val_fraction"])
     test, val, train = pairs[:n_test], pairs[n_test:n_test + n_val], pairs[n_test + n_val:]
-    print(f"{len(pairs)} clean pairs from {cfg['max_lines']} raw lines: train {len(train)}, val {len(val)}, test {len(test)}")
+    print(f"{len(pairs)} pairs: train {len(train)}, val {len(val)}, test {len(test) or sum(len(v[0]) for v in eval_sets.values())}")
+    if eval_sets:  # keep the eval sets with the model too, like test_es.txt for single-corpus runs
+        os.makedirs(os.path.join(model_dir, "eval"), exist_ok=True)
+        for name, (es, en) in eval_sets.items():
+            Path(model_dir, "eval", name + ".es").write_text("\n".join(es) + "\n", encoding="utf-8")
+            Path(model_dir, "eval", name + ".en").write_text("\n".join(en) + "\n", encoding="utf-8")
 
     # The test set is never trained on; it travels with the model so evaluations stay comparable.
-    with open(os.path.join(model_dir, "test_es.txt"), "w", encoding="utf-8") as f_es, \
-         open(os.path.join(model_dir, "test_en.txt"), "w", encoding="utf-8") as f_en:
-        for es, en in test:
-            f_es.write(es + "\n")
-            f_en.write(en + "\n")
+    # (Mix runs are scored on the fixed eval sets instead, so they have no test file to write.)
+    if test:
+        with open(os.path.join(model_dir, "test_es.txt"), "w", encoding="utf-8") as f_es, \
+             open(os.path.join(model_dir, "test_en.txt"), "w", encoding="utf-8") as f_en:
+            for es, en in test:
+                f_es.write(es + "\n")
+                f_en.write(en + "\n")
 
     spm_path = train_tokenizer(cfg, train, model_dir) if cfg["retrain_tokenizer"] else cfg["tokenizer"]
 
     train_cfg = {k: cfg[k] for k in ("d_model", "nhead", "num_encoder_layers", "num_decoder_layers",
                                      "dim_feedforward", "dropout", "batch_size", "epochs", "warmup_steps",
                                      "label_smoothing", "bleu_every", "bleu_sentences", "lr_scale",
-                                     "early_stop_patience") if k in cfg}
+                                     "early_stop_patience", "norm_first", "spike_factor", "max_rollbacks") if k in cfg}
     train_cfg["save_dir"] = model_dir
     run_training(
         src_sentences_train=[es for es, _ in train], tgt_sentences_train=[en for _, en in train],
@@ -157,13 +197,24 @@ def run_from_config(path):
     ckpt = torch.load(os.path.join(model_dir, "best_transformer.pt"), map_location=device)
     model = TransformerSeq2Seq(tok.vocab_size(), tok.vocab_size(), dropout=0.0, pad_idx=tok.id_pad, **ckpt["arch"]).to(device)
     model.load_state_dict(ckpt["model_state"])
-    hyps = greedy_batch(model, [es for es, _ in test], tok, device)
-    refs = [en for _, en in test]
-    bleu, chrf = sacrebleu.corpus_bleu(hyps, [refs]).score, sacrebleu.corpus_chrf(hyps, [refs]).score
-    print(f"\nTest set ({len(test)} sentences, greedy, best epoch {ckpt['epoch']}): BLEU {bleu:.2f}  chrF {chrf:.2f}")
-    emit({"step": ckpt["epoch"], "test_bleu": bleu, "test_chrf": chrf})
-    for es, hyp, ref in list(zip([es for es, _ in test], hyps, refs))[:5]:
-        print(f"  ES  {es}\n  OUT {hyp}\n  REF {ref}\n")
+    if not eval_sets:
+        eval_sets = {"test": ([es for es, _ in test], [en for _, en in test])}
+    record, all_hyps, all_refs = {"step": ckpt["epoch"]}, [], []
+    print(f"\nBest epoch {ckpt['epoch']}, greedy decoding:")
+    for name, (es, refs) in eval_sets.items():
+        hyps = greedy_batch(model, es, tok, device)
+        bleu, chrf = sacrebleu.corpus_bleu(hyps, [refs]).score, sacrebleu.corpus_chrf(hyps, [refs]).score
+        print(f"  {name:10} ({len(es)} sentences): BLEU {bleu:.2f}  chrF {chrf:.2f}")
+        if len(eval_sets) > 1:
+            record[f"test_bleu_{name}"], record[f"test_chrf_{name}"] = bleu, chrf
+        all_hyps += hyps
+        all_refs += refs
+        for s, hyp, ref in list(zip(es, hyps, refs))[:2]:
+            print(f"    ES  {s}\n    OUT {hyp}\n    REF {ref}\n")
+    record["test_bleu"] = sacrebleu.corpus_bleu(all_hyps, [all_refs]).score
+    record["test_chrf"] = sacrebleu.corpus_chrf(all_hyps, [all_refs]).score
+    print(f"  overall: BLEU {record['test_bleu']:.2f}  chrF {record['test_chrf']:.2f}")
+    emit(record)
 
 
 if __name__ == "__main__":

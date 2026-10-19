@@ -1,7 +1,7 @@
 # Run 3: the same model and training fixes as retrain.yaml, on a multi-domain mix instead of
 # Europarl alone. The pools and fixed eval sets come from build_mix.py (see its docstring).
 #   python main.py --config configs/mix-v1.yaml      (or Training → New run in the Helm)
-# Estimated time on a Colab T4: ~15 min per epoch; early stopping usually ends it sooner.
+# Estimated time on a Colab T4: ~25 min per epoch. (Run 3: best epoch 8, collapsed in epoch 9; see mix-v2.yaml.)
 
 # --- data: the first max_pairs of each pre-shuffled pool ---
 data_root: data/data/mix-v1   # the Helm points Colab runs at Drive › Helm/datasets/mt-mix-v1
@@ -19,8 +19,7 @@ retrain_tokenizer: true       # a fresh 16k BPE fitted to the mix
 vocab_size: 16000
 tokenizer: models/models/spm_shared.model   # used only when retrain_tokenizer is false
 
-# --- model ---
-norm_first: true              # Pre-LayerNorm: run 3 (post-LN) collapsed in epoch 9; pre-LN trains far more stably
+# --- model (unchanged) ---
 d_model: 512
 nhead: 8
 num_encoder_layers: 6
@@ -34,8 +33,6 @@ batch_size: 64
 warmup_steps: 8000
 lr_scale: 0.5
 early_stop_patience: 3
-spike_factor: 1.5             # val loss > 1.5 × best → roll back to the best checkpoint at half the learning rate
-max_rollbacks: 3
 label_smoothing: 0.1
 bleu_every: 1                 # validation BLEU every epoch
 bleu_sentences: 300

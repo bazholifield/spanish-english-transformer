@@ -1,0 +1,44 @@
+# Run 4: run 3's multi-domain mix with two stability fixes (run 3 collapsed in epoch 9):
+# pre-LayerNorm, and rollback to the best checkpoint at half the learning rate on a loss spike.
+# Data: mix-v2 = mix-v1 minus ~800 training pairs whose English matched an eval sentence.
+#   python main.py --config configs/mix-v2.yaml      (or Training → New run in the Helm)
+# Estimated time on a Colab T4: ~25 min per epoch.
+
+# --- data: the first max_pairs of each pre-shuffled pool ---
+data_root: data/data/mix-v2   # the Helm points Colab runs at Drive › Helm/datasets/mt-mix-v2
+datasets:
+  - {name: tatoeba,   max_pairs: 229000}   # everyday sentences (the whole pool)
+  - {name: ted,       max_pairs: 200000}   # spoken explanations
+  - {name: subtitles, max_pairs: 250000}   # dialogue and slang
+  - {name: europarl,  max_pairs: 150000}   # keep the formal register
+val_fraction: 0.01            # ~8k pairs to watch for overfitting
+seed: 42
+# Test sets: the fixed 500-per-domain sets in <data_root>/eval/, the same for every run.
+
+# --- tokenizer ---
+retrain_tokenizer: true       # a fresh 16k BPE fitted to the mix
+vocab_size: 16000
+tokenizer: models/models/spm_shared.model   # used only when retrain_tokenizer is false
+
+# --- model ---
+norm_first: true              # Pre-LayerNorm: run 3 (post-LN) collapsed in epoch 9; pre-LN trains far more stably
+d_model: 512
+nhead: 8
+num_encoder_layers: 6
+num_decoder_layers: 6
+dim_feedforward: 2048
+dropout: 0.1
+
+# --- training (run 2's fixes) ---
+epochs: 12
+batch_size: 64
+warmup_steps: 8000
+lr_scale: 0.5
+early_stop_patience: 3
+spike_factor: 1.5             # val loss > 1.5 × best → roll back to the best checkpoint at half the learning rate
+max_rollbacks: 3
+label_smoothing: 0.1
+bleu_every: 1                 # validation BLEU every epoch
+bleu_sentences: 300
+
+output_dir: runs/local        # replaced by the Helm with the run's own folder

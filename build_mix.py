@@ -137,7 +137,10 @@ def main():
             pools[name] = [p for p in pools[name] if norm(p[0]) not in exclude]
         else:
             evals[name], pools[name] = pools[name][:args.eval_size], pools[name][args.eval_size:]
+    # Exclude eval sentences by BOTH sides: Tatoeba often has several Spanish versions of one English
+    # sentence, so a Spanish-only check let ~22% of its eval targets into training (found in run 3).
     held_out = {norm(es) for pairs in evals.values() for es, _ in pairs}
+    held_out_en = {norm(en) for pairs in evals.values() for _, en in pairs}
 
     taken: set[str] = set()
     for name in PRIORITY:  # cross-corpus dedupe by Spanish sentence, higher-priority pools first
@@ -145,7 +148,7 @@ def main():
         pool = []
         for es, en in pools[name]:
             k = norm(es)
-            if k in held_out or k in taken:
+            if k in held_out or k in taken or norm(en) in held_out_en:
                 continue
             taken.add(k)
             pool.append((es, en))
@@ -166,7 +169,7 @@ def main():
         "filters": ["strip subtitle tags and leading dialogue dashes", "non-empty, not identical",
                     f"both sides ≤ {args.max_chars} chars", "length ratio 0.5–2 (or within 12 chars)",
                     "≥ 2 letters per side", "no ♪ lyrics", "exact-pair dedupe within a corpus",
-                    "Spanish-side dedupe across corpora", "eval sentences excluded everywhere"],
+                    "Spanish-side dedupe across corpora", "eval sentences excluded everywhere, by Spanish and English side"],
         "sources": {n: {"url": SOURCES[n]["url"], "license": SOURCES[n]["license"], **stats[n]} for n in PRIORITY},
     }
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False))

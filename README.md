@@ -2,7 +2,9 @@
 
 A sequence-to-sequence Transformer model for Spanish-to-English translation, built from scratch in PyTorch. I started working on this project in 2024 while working through an online course on transformer-based MT models, since I wanted to try to build one of my own rather than just follow along. I picked Spanish and English since I speak both reasonably well, which makes it easier to check the outputs.
 
-**Current model: 17.3 BLEU / 42.7 chrF** on 1,000 held-out Europarl sentences (October 2026 retrain). It translates parliamentary Spanish well and still struggles with everyday language, which is what the next training run targets.
+**Current model: 23.8 BLEU / 47.6 chrF** across four registers (parliament, TED talks, film dialogue
+and everyday sentences; 1,800 held-out sentences), up from 10.1 for the Europarl-only model. It
+came from training on a multi-domain mix (October 2026, run 3). Run 4, with two stability fixes, is next.
 
 ---
 
@@ -17,14 +19,15 @@ The model is a standard encoder-decoder Transformer (the original "Attention is 
 - Sinusoidal positional encoding
 - Label smoothing = 0.1, dropout = 0.1
 
-**Training** (current model):
-- Data: [Europarl v7](https://www.statmt.org/europarl/) ES-EN, the first 200,000 raw lines → ~104k pairs after cleaning (sentences ≤ 150 characters)
-- Splits: 1,000 held-out test sentences (saved with the model), 3% validation, the rest for training
+**Training** (current model, run 3):
+- Data: ~830k sentence pairs from four [OPUS](https://opus.nlpl.eu/) corpora, built by `build_mix.py`:
+  Tatoeba (everyday, all 229k), TED2020 talks (200k), OpenSubtitles (dialogue, 250k sampled from ~105M),
+  and Europarl (parliament, 150k). Sentences ≤ 150 characters, deduplicated across corpora.
+- Splits: 1% validation; testing on four fixed 500-sentence sets, one per register, never trained on
 - Tokenizer: SentencePiece BPE, shared 16k vocab, retrained on each run's training split
 - Optimizer: AdamW with the Noam warmup/decay schedule (8,000 warmup steps, peak scaled by 0.5)
-- Mixed precision training (FP16) via `torch.cuda.amp`
-- Early stopping after 3 epochs without a better validation loss: stopped at epoch 19, best checkpoint from epoch 16 (~1 hour on a Colab T4)
-- **BLEU 17.3 / chrF 42.7** on the held-out test set (greedy decoding)
+- Mixed precision training (FP16) via `torch.cuda.amp`, about 25 minutes per epoch on a Colab T4
+- Best checkpoint: epoch 8. In epoch 9 the loss suddenly spiked and training collapsed (see "What I fixed")
 
 Decoding supports greedy search and beam search (beam width = 5).
 
@@ -32,7 +35,9 @@ Decoding supports greedy search and beam search (beam width = 5).
 
 ## Results
 
-| Model | Training data | Test BLEU / chrF |
+The first three models were trained on Europarl only and scored on 1,000 held-out Europarl sentences:
+
+| Model | Training data | Europarl test BLEU / chrF |
 |---|---|---|
 | Original notebook checkpoint (May 2026) | Europarl, small subset | ~1 / 18.6† (couldn't stop generating) |
 | Retrain 1 (Oct 2026) | ~104k pairs, end-token fix | 10.3 / 37.2* |
@@ -43,14 +48,21 @@ Decoding supports greedy search and beam search (beam width = 5).
 
 The original notebook reported 22.29 BLEU, but I couldn't reproduce that: the saved checkpoint scores about 1 BLEU on held-out data because of the bugs below, so that number was measured some other way.
 
-Since everyday language is the weak spot, I also score models on four fixed 500-sentence test sets from different registers (never trained on, the same for every model). On 50 sentences from each:
+Since everyday language was the weak spot, I score every model on four fixed test sets from
+different registers, 500 sentences each and the same for every model. The scores below use the
+1,800 of those 2,000 sentences whose English translation never appeared in any training data
+(see fix 4 below):
 
-| Domain | Retrain 1 | Retrain 2 |
-|---|---|---|
-| Parliament (Europarl) | 9.7 | **14.2** |
-| Spoken (TED talks) | 4.4 | **6.7** |
-| Dialogue (OpenSubtitles) | 2.9 | **5.7** |
-| Everyday (Tatoeba) | 2.0 | **4.0** |
+| Register (sentences) | Retrain 1 | Retrain 2 | **Retrain 3** |
+|---|---|---|---|
+| Parliament: Europarl (482) | 11.4 | 16.2 | **17.5** |
+| Spoken: TED talks (488) | 4.2 | 6.4 | **21.5** |
+| Dialogue: OpenSubtitles (443) | 3.3 | 5.1 | **25.2** |
+| Everyday: Tatoeba (387) | 4.2 | 8.4 | **43.5** |
+| **All (1,800): BLEU / chrF** | 6.7 / 29.6 | 10.1 / 33.7 | **23.8 / 47.6** |
+
+Training on the mix barely changed parliamentary text and multiplied everything else 3–5×.
+(Greedy decoding. Retrain 1 is decoded the way it was trained, starting from `<s> <s>`.)
 
 ---
 
@@ -61,6 +73,17 @@ Retraining with more data exposed three bugs that had been there from the start:
 1. **The model never learned to stop.** The tokenizer defines `<s>`, `</s>` and `<pad>` as user-defined pieces, so SentencePiece's own `bos_id()`/`eos_id()`/`pad_id()` return -1. The dataset clamped those -1s to 0, the padding id, so every target ended in padding instead of an end token, and the loss ignores padding. That's why the old model's output looped. `src/tokenizer.py` now looks the pieces up by name (`<s>` = 1, `</s>` = 2, `<pad>` = 3).
 2. **The model never started a sentence.** Targets already begin with `<s>`, and `shift_right` added another, so training taught "after `<s>`, predict `<s>`". Teacher forcing now uses the standard split: decoder input `[<s>, w1 … wn]`, labels `[w1 … wn, </s>]`.
 3. **Training diverged once there was enough data.** With the original small dataset, the run never got past the 8,000-step warmup (7,659 pairs × 40 epochs ≈ 4,300 steps with the local pipeline), so the learning rate never peaked. With ~104k pairs it peaked at epoch 5, and with small batches, post-LayerNorm and FP16, the loss blew up to NaN at epoch 11. The schedule's peak is now halved (`lr_scale: 0.5`), and training stops early on a plateau or a NaN.
+
+4. **Some test sentences leaked into training.** `build_mix.py` held test pairs out by their Spanish
+   side only, but Tatoeba often has several Spanish versions of one English sentence. About 22% of the
+   Tatoeba test translations (11% for subtitles) were also training targets. It now excludes test pairs
+   by both sides (`mix-v2`), and every score above leaves out the leaked sentences. The run 3 gains held
+   up: Tatoeba moved from 43.9 to 43.5, the others barely changed.
+5. **Run 3 collapsed in epoch 9.** After eight good epochs the validation loss jumped and never
+   recovered, the classic instability of "post-LayerNorm" Transformers trained in FP16. Run 4 uses
+   pre-LayerNorm (normalise before each sublayer, as most modern Transformers do), rolls back to the
+   best checkpoint at half the learning rate if the loss spikes, and logs gradient size and the FP16
+   loss scale every 500 steps so the next problem can be diagnosed rather than guessed.
 
 I also went from 7,659 training pairs to ~104k: the original `clean.py` only reads the first 20,000 lines of the 1.9M-line corpus.
 
@@ -76,12 +99,13 @@ I also went from 7,659 training pairs to ~104k: the original `clean.py` only rea
 │   ├── train.py          # Training loop (config-driven)
 │   └── utils.py          # Greedy/beam decode, masking
 ├── configs/
-│   ├── retrain.yaml      # Current model: Europarl, all fixes
-│   └── mix-v1.yaml       # Next run: multi-domain mix
+│   ├── retrain.yaml      # Run 2: Europarl only, all bug fixes
+│   ├── mix-v1.yaml       # Run 3 (current model): multi-domain mix
+│   └── mix-v2.yaml       # Run 4 (next): leak-free mix, pre-LN, spike rollback
 ├── data/data/
 │   ├── raw/              # Europarl source files
 │   ├── processed/        # Cleaned sentence pairs (original 7,659-pair set)
-│   ├── mix-v1/           # Multi-domain pools + fixed eval sets (built by build_mix.py)
+│   ├── mix-v1/, mix-v2/  # Multi-domain pools + fixed eval sets (built by build_mix.py)
 │   ├── load.py
 │   └── clean.py
 ├── models/               # Saved tokenizer + checkpoint (original run)
@@ -101,13 +125,13 @@ I also went from 7,659 training pairs to ~104k: the original `clean.py` only rea
 ```bash
 pip install -r requirements.txt
 
-# Train the current model (builds the data from data/data/raw, trains its own tokenizer,
-# holds out a test set and reports test BLEU at the end)
-python main.py --config configs/retrain.yaml
+# Build the multi-domain mix (download the OPUS corpora into data/data/opus first; URLs in
+# build_mix.py), then train on it. Scores the best checkpoint on the four test sets at the end.
+python build_mix.py --out data/data/mix-v2
+python main.py --config configs/mix-v2.yaml
 
-# Build the multi-domain mix (downloads from OPUS into data/data/opus first), then train on it
-python build_mix.py
-python main.py --config configs/mix-v1.yaml
+# Run 2: Europarl only (builds the data from data/data/raw, holds out a 1,000-sentence test set)
+python main.py --config configs/retrain.yaml
 
 # The original run (processed data + models/models tokenizer)
 python main.py
@@ -121,49 +145,58 @@ Training needs a GPU; I run it on Colab, where checkpoints and metrics are saved
 
 ## Sample outputs
 
-These are from the current model (retrain 2), on the same sentences I used for the original run so the two can be compared.
+These are from the current model (retrain 3), on the same sentences I used for the original run so
+the models can be compared.
 
-**Closest to training domain** — now essentially right:
+**Parliamentary:**
 ```
 ES: Es importante garantizar los derechos fundamentales de todos los ciudadanos.
-EN: It is important to guarantee the rights of all citizens.
+EN: It is important to ensure that all citizens' fundamental rights are given.
 ```
-The original run gave "It is important that we need to have the rights of our citizens." The only thing missing now is "fundamental".
+It now keeps "fundamental", which retrain 2 dropped ("It is important to guarantee the rights of all
+citizens."), though "are given" is a clumsy way to end it.
 
-**Personal/colloquial — still off:**
+**Personal/colloquial:** now right:
 ```
 ES: Llegué tarde porque se me olvidó el despertador.
-EN: I was told it was the Conservative to be taken off the tail.
+EN: I was late because I forgot the alarm clock.
 ```
-Still no idea what to do with everyday language. "Se me olvidó" (the reflexive construction) and alarm clocks basically never come up in parliament, so it reaches for parliamentary vocabulary ("the Conservative").
+Retrain 2 gave "I was told it was the Conservative to be taken off the tail." The reflexive *se me
+olvidó* is handled correctly, which is exactly what the everyday data was for.
 
-**Imperfect tense + personal narrative:**
+**Imperfect tense + personal narrative:** close, but the roles are swapped:
 ```
 ES: Cuando era pequeña, mi abuela me contaba historias cada noche.
-EN: When I went to my night it was small, I was a little saddened.
+EN: When my grandmother was little, I was telling stories every night.
 ```
-Better than the original (it gets "When", "small" and the first person), but the meaning is gone. Personal narrative is still out of distribution.
+Spanish drops the subject of *era* ("when [I] was little"), and the model filled it in with the
+nearest noun, "my grandmother". It also gave *contaba* to "I" instead of the grandmother. Dropped
+subjects (pro-drop) are a phenomenon I want to test systematically (see ROADMAP).
 
 **Long sentence:**
 ```
 ES: A pesar de los esfuerzos realizados durante los últimos años para mejorar la situación
     económica de las regiones más vulnerables, los resultados han sido desiguales y aún
     queda mucho trabajo por hacer.
-EN: Despite the efforts of the economy, the labour market has been much more vulnerable for
-    the last few years and much more vulnerable to the working conditions.
+EN: Despite the efforts made over the last few years, the economic situation has been much more
+    vulnerable to improve and to make the work of the regions vulnerable.
 ```
-It no longer loops: it produces one fluent sentence and stops. It opens correctly ("Despite the efforts…") but loses the thread halfway and repeats "much more vulnerable".
+The opening is now right ("Despite the efforts made over the last few years"), but it still loses
+the thread in long sentences and recycles "vulnerable".
 
 ---
 
 ## Current limitations
 
-The current model is still trained only on Europarl (EU parliamentary proceedings), so it's strong on formal, political language and weak on everyday Spanish: the domain table above shows it's about 3.5× better on parliament text than on everyday sentences. Beam search in `src/utils.py` also keeps extending beams after they've ended, so greedy decoding currently gives cleaner output.
+Long sentences still lose the thread, and dropped subjects get filled in with the wrong person.
+Beam search in `src/utils.py` keeps extending beams after they've ended, so greedy decoding gives
+cleaner output for now. The model is trained on TED2020 (CC BY-NC-ND) and OpenSubtitles (research
+use), so it's for non-commercial use.
 
 ---
 
 ## What's next
 
-- **Multi-domain training (prepared):** `configs/mix-v1.yaml` trains on ~830k pairs from Tatoeba (everyday), TED talks (spoken), OpenSubtitles (dialogue) and Europarl, with the same fixes. Data from [OPUS](https://opus.nlpl.eu/); licenses are recorded in `data/data/mix-v1/manifest.json`.
-- Fix beam search (carry finished beams forward, length normalization) and add a repetition penalty
-- Experiment with a bigger model config once the data is more diverse
+The plan is in [ROADMAP.md](ROADMAP.md): finish run 4 and fix beam search, publish the model with a
+browser demo on Hugging Face, and a linguistic evaluation (a challenge set of Spanish phenomena such
+as pro-drop, *se* constructions, *ser/estar* and false friends, plus an error analysis).

@@ -179,7 +179,8 @@ def run_from_config(path):
     train_cfg = {k: cfg[k] for k in ("d_model", "nhead", "num_encoder_layers", "num_decoder_layers",
                                      "dim_feedforward", "dropout", "batch_size", "epochs", "warmup_steps",
                                      "label_smoothing", "bleu_every", "bleu_sentences", "lr_scale",
-                                     "early_stop_patience", "norm_first", "spike_factor", "max_rollbacks") if k in cfg}
+                                     "early_stop_patience", "norm_first", "spike_factor", "max_rollbacks",
+                                     "report_every") if k in cfg}
     train_cfg["save_dir"] = model_dir
     run_training(
         src_sentences_train=[es for es, _ in train], tgt_sentences_train=[en for _, en in train],

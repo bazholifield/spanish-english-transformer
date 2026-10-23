@@ -14,10 +14,16 @@ def teacher_forcing(tgt_batch):
     return tgt_batch[:, :-1], tgt_batch[:, 1:]
 
 
-def train_epoch(model, dataloader, optimizer, criterion, device, tgt_bos_id, scaler, scheduler=None):
+def train_epoch(model, dataloader, optimizer, criterion, device, tgt_bos_id, scaler, scheduler=None,
+                step0=0, report_every=0):
+    """One pass over the data. With report_every, emits a stability record every N steps: the
+    gradient size before clipping (mean and max over the window), how many steps fp16 overflowed
+    and skipped, and the GradScaler's scale. A blow-up shows as grad_norm climbing; an fp16
+    problem as overflow_steps rising and loss_scale collapsing."""
     model.train()
     total_loss = 0.0
-    for src_batch, tgt_batch in dataloader:
+    win_loss, win_norms, win_overflow = 0.0, [], 0
+    for i, (src_batch, tgt_batch) in enumerate(dataloader, 1):
         src_batch = src_batch.to(device)
         tgt_batch = tgt_batch.to(device)
         optimizer.zero_grad()
@@ -34,7 +40,7 @@ def train_epoch(model, dataloader, optimizer, criterion, device, tgt_bos_id, sca
         scaler.scale(loss).backward()
 
         scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0).item()  # size before clipping
 
         scaler.step(optimizer)
         scaler.update()
@@ -43,6 +49,20 @@ def train_epoch(model, dataloader, optimizer, criterion, device, tgt_bos_id, sca
             scheduler.step()
 
         total_loss += loss.item()
+
+        if report_every:
+            win_loss += loss.item()
+            if math.isfinite(grad_norm):
+                win_norms.append(grad_norm)
+            else:
+                win_overflow += 1  # GradScaler skips this step and lowers its scale
+            if i % report_every == 0:
+                emit({"step": step0 + i, "loss": win_loss / report_every,
+                      "grad_norm": sum(win_norms) / len(win_norms) if win_norms else float("nan"),
+                      "grad_norm_max": max(win_norms, default=float("nan")),
+                      "overflow_steps": win_overflow, "loss_scale": scaler.get_scale(),
+                      "learning_rate": scheduler.get_last_lr()[0] if scheduler else None})
+                win_loss, win_norms, win_overflow = 0.0, [], 0
 
     return total_loss / len(dataloader)
 
@@ -79,6 +99,7 @@ DEFAULTS = {
     "norm_first": False,         # Pre-LayerNorm transformer (more stable; new runs only)
     "spike_factor": 0.0,         # val loss > best × this (or NaN) → roll back to the best checkpoint (0 = off)
     "max_rollbacks": 3,          # give up after this many rollbacks
+    "report_every": 500,         # steps between stability records to the Helm (0 = off)
     "save_dir": os.path.join("models", "models"),
 }
 
@@ -175,7 +196,8 @@ def run_training(src_sentences_train, tgt_sentences_train,
     rollbacks = 0
     for epoch in range(1, N_EPOCHS + 1):
         t0 = time.time()
-        train_loss = train_epoch(model, train_loader, optimizer, criterion, device, bos_idx, scaler, scheduler)
+        train_loss = train_epoch(model, train_loader, optimizer, criterion, device, bos_idx, scaler, scheduler,
+                                 step0=(epoch - 1) * steps_per_epoch, report_every=cfg["report_every"])
         val_loss = evaluate(model, val_loader, criterion, device, bos_idx)
         t1 = time.time()
         print(f"Epoch {epoch} train_loss={train_loss:.4f} val_loss={val_loss:.4f} time={t1-t0:.1f}s")

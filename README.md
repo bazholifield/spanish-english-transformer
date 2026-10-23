@@ -53,15 +53,17 @@ different registers, 500 sentences each and the same for every model. The scores
 1,800 of those 2,000 sentences whose English translation never appeared in any training data
 (see fix 4 below):
 
-| Register (sentences) | Retrain 1 | Retrain 2 | **Retrain 3** |
-|---|---|---|---|
-| Parliament: Europarl (482) | 11.4 | 16.2 | **17.5** |
-| Spoken: TED talks (488) | 4.2 | 6.4 | **21.5** |
-| Dialogue: OpenSubtitles (443) | 3.3 | 5.1 | **25.2** |
-| Everyday: Tatoeba (387) | 4.2 | 8.4 | **43.5** |
-| **All (1,800): BLEU / chrF** | 6.7 / 29.6 | 10.1 / 33.7 | **23.8 / 47.6** |
+| Register (sentences) | Retrain 1 | Retrain 2 | Retrain 3 | **Retrain 4** |
+|---|---|---|---|---|
+| Parliament: Europarl (482) | 11.4 | 16.2 | 17.5 | **17.8** |
+| Spoken: TED talks (488) | 4.2 | 6.4 | 21.5 | **22.5** |
+| Dialogue: OpenSubtitles (443) | 3.3 | 5.1 | **25.2** | 24.4 |
+| Everyday: Tatoeba (387) | 4.2 | 8.4 | **43.5** | 42.4 |
+| **All (1,800): BLEU / chrF** | 6.7 / 29.6 | 10.1 / 33.7 | 23.8 / **47.6** | **24.0** / 47.3 |
 
-Training on the mix barely changed parliamentary text and multiplied everything else 3–5×.
+Training on the mix barely changed parliamentary text and multiplied everything else 3–5×. Retrain 4 adds
+the stability fixes (fix 5 below): it scores about the same as retrain 3's best epoch, but trained for
+all 12 epochs without collapsing and was still improving at the end, so a longer run (in progress) is next.
 (Greedy decoding. Retrain 1 is decoded the way it was trained, starting from `<s> <s>`.)
 
 ---

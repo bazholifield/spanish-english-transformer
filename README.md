@@ -2,9 +2,10 @@
 
 A sequence-to-sequence Transformer model for Spanish-to-English translation, built from scratch in PyTorch. I started working on this project in 2024 while working through an online course on transformer-based MT models, since I wanted to try to build one of my own rather than just follow along. I picked Spanish and English since I speak both reasonably well, which makes it easier to check the outputs.
 
-**Current model: 23.8 BLEU / 47.6 chrF** across four registers (parliament, TED talks, film dialogue
-and everyday sentences; 1,800 held-out sentences), up from 10.1 for the Europarl-only model. It
-came from training on a multi-domain mix (October 2026, run 3). Run 4, with two stability fixes, is next.
+**Current model: 26.6 BLEU / 49.5 chrF** across four registers (parliament, TED talks, film dialogue
+and everyday sentences; 1,800 held-out sentences), up from 10.1 for the Europarl-only model and 6.7
+for the first working retrain. It came from training on a multi-domain mix with stability fixes for
+20 epochs (October 2026, run 5).
 
 ---
 
@@ -19,15 +20,16 @@ The model is a standard encoder-decoder Transformer (the original "Attention is 
 - Sinusoidal positional encoding
 - Label smoothing = 0.1, dropout = 0.1
 
-**Training** (current model, run 3):
+**Training** (current model, run 5):
 - Data: ~830k sentence pairs from four [OPUS](https://opus.nlpl.eu/) corpora, built by `build_mix.py`:
-  Tatoeba (everyday, all 229k), TED2020 talks (200k), OpenSubtitles (dialogue, 250k sampled from ~105M),
-  and Europarl (parliament, 150k). Sentences ≤ 150 characters, deduplicated across corpora.
+  Tatoeba (everyday, all ~212k), TED2020 talks (200k), OpenSubtitles (dialogue, 250k sampled from ~105M),
+  and Europarl (parliament, 150k). Sentences ≤ 150 characters, deduplicated across corpora, with every
+  test sentence excluded by both its Spanish and its English side.
 - Splits: 1% validation; testing on four fixed 500-sentence sets, one per register, never trained on
 - Tokenizer: SentencePiece BPE, shared 16k vocab, retrained on each run's training split
-- Optimizer: AdamW with the Noam warmup/decay schedule (8,000 warmup steps, peak scaled by 0.5)
+- Pre-LayerNorm Transformer; AdamW with the Noam warmup/decay schedule (8,000 warmup steps, peak scaled by 0.5)
 - Mixed precision training (FP16) via `torch.cuda.amp`, about 25 minutes per epoch on a Colab T4
-- Best checkpoint: epoch 8. In epoch 9 the loss suddenly spiked and training collapsed (see "What I fixed")
+- 20 epochs (~8.5 hours) with no loss spikes; validation loss fell every epoch, best at epoch 20
 
 Decoding supports greedy search and beam search (beam width = 5).
 
@@ -53,17 +55,18 @@ different registers, 500 sentences each and the same for every model. The scores
 1,800 of those 2,000 sentences whose English translation never appeared in any training data
 (see fix 4 below):
 
-| Register (sentences) | Retrain 1 | Retrain 2 | Retrain 3 | **Retrain 4** |
-|---|---|---|---|---|
-| Parliament: Europarl (482) | 11.4 | 16.2 | 17.5 | **17.8** |
-| Spoken: TED talks (488) | 4.2 | 6.4 | 21.5 | **22.5** |
-| Dialogue: OpenSubtitles (443) | 3.3 | 5.1 | **25.2** | 24.4 |
-| Everyday: Tatoeba (387) | 4.2 | 8.4 | **43.5** | 42.4 |
-| **All (1,800): BLEU / chrF** | 6.7 / 29.6 | 10.1 / 33.7 | 23.8 / **47.6** | **24.0** / 47.3 |
+| Register (sentences) | Retrain 1 | Retrain 2 | Retrain 3 | Retrain 4 | **Retrain 5** |
+|---|---|---|---|---|---|
+| Parliament: Europarl (482) | 11.4 | 16.2 | 17.5 | 17.8 | **20.3** |
+| Spoken: TED talks (488) | 4.2 | 6.4 | 21.5 | 22.5 | **25.7** |
+| Dialogue: OpenSubtitles (443) | 3.3 | 5.1 | 25.2 | 24.4 | **26.7** |
+| Everyday: Tatoeba (387) | 4.2 | 8.4 | 43.5 | 42.4 | **45.2** |
+| **All (1,800): BLEU / chrF** | 6.7 / 29.6 | 10.1 / 33.7 | 23.8 / 47.6 | 24.0 / 47.3 | **26.6 / 49.5** |
 
-Training on the mix barely changed parliamentary text and multiplied everything else 3–5×. Retrain 4 adds
-the stability fixes (fix 5 below): it scores about the same as retrain 3's best epoch, but trained for
-all 12 epochs without collapsing and was still improving at the end, so a longer run (in progress) is next.
+Training on the mix barely changed parliamentary text and multiplied everything else 3–5×. Retrain 4 added
+the stability fixes (fix 5 below): it scored about the same as retrain 3's best epoch, but trained for all
+12 epochs without collapsing and was still improving. Retrain 5 is the same setup for 20 epochs, and it
+improves on every register (+2.6 BLEU overall).
 (Greedy decoding. Retrain 1 is decoded the way it was trained, starting from `<s> <s>`.)
 
 ---
@@ -147,50 +150,52 @@ Training needs a GPU; I run it on Colab, where checkpoints and metrics are saved
 
 ## Sample outputs
 
-These are from the current model (retrain 3), on the same sentences I used for the original run so
+These are from the current model (retrain 5), on the same sentences I used for the original run so
 the models can be compared.
 
-**Parliamentary:**
+**Parliamentary:** nearly right:
 ```
 ES: Es importante garantizar los derechos fundamentales de todos los ciudadanos.
-EN: It is important to ensure that all citizens' fundamental rights are given.
+EN: It is important to ensure fundamental rights of all citizens.
 ```
-It now keeps "fundamental", which retrain 2 dropped ("It is important to guarantee the rights of all
-citizens."), though "are given" is a clumsy way to end it.
+Only "the" is missing ("the fundamental rights"). Retrain 2 dropped "fundamental", and retrain 3
+ended with the clumsy "…are given".
 
-**Personal/colloquial:** now right:
+**Personal/colloquial:** right:
 ```
 ES: Llegué tarde porque se me olvidó el despertador.
-EN: I was late because I forgot the alarm clock.
+EN: I was late because I forgot the alarm.
 ```
 Retrain 2 gave "I was told it was the Conservative to be taken off the tail." The reflexive *se me
 olvidó* is handled correctly, which is exactly what the everyday data was for.
 
-**Imperfect tense + personal narrative:** close, but the roles are swapped:
+**Imperfect tense + personal narrative:** right:
 ```
 ES: Cuando era pequeña, mi abuela me contaba historias cada noche.
-EN: When my grandmother was little, I was telling stories every night.
+EN: When I was little, my grandmother told me stories every night.
 ```
-Spanish drops the subject of *era* ("when [I] was little"), and the model filled it in with the
-nearest noun, "my grandmother". It also gave *contaba* to "I" instead of the grandmother. Dropped
-subjects (pro-drop) are a phenomenon I want to test systematically (see ROADMAP).
+Spanish drops the subject of *era* ("when [I] was little"). Retrain 3 filled it in with the nearest
+noun ("When my grandmother was little, I was telling stories"); retrain 5 gets both the dropped
+subject and who told the stories. Dropped subjects (pro-drop) are still worth testing systematically
+(see ROADMAP), but this classic case now works.
 
 **Long sentence:**
 ```
 ES: A pesar de los esfuerzos realizados durante los últimos años para mejorar la situación
     económica de las regiones más vulnerables, los resultados han sido desiguales y aún
     queda mucho trabajo por hacer.
-EN: Despite the efforts made over the last few years, the economic situation has been much more
-    vulnerable to improve and to make the work of the regions vulnerable.
+EN: Despite the efforts made to improve the economic situation in recent years, the regions have
+    been much more vulnerable, and they have still been much more vulnerable.
 ```
-The opening is now right ("Despite the efforts made over the last few years"), but it still loses
-the thread in long sentences and recycles "vulnerable".
+The first half is now a fluent, faithful clause, but the second half loses the thread ("the results
+have been uneven and much work remains") and repeats itself. Long sentences are the clearest
+remaining weakness.
 
 ---
 
 ## Current limitations
 
-Long sentences still lose the thread, and dropped subjects get filled in with the wrong person.
+Long sentences still lose the thread and repeat themselves.
 Beam search in `src/utils.py` keeps extending beams after they've ended, so greedy decoding gives
 cleaner output for now. The model is trained on TED2020 (CC BY-NC-ND) and OpenSubtitles (research
 use), so it's for non-commercial use.

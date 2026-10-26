@@ -2,7 +2,7 @@
 
 **Goal:** a Spanish→English translator, built from scratch, that someone else can actually use, plus an honest linguist's account of what it gets right and where it fails.
 
-**Now:** run 5 (run 4's setup for 20 epochs) is training on Colab; next come beam search and a comparison with a production model.
+**Now:** run 5 is the best model yet (26.6 BLEU / 49.5 chrF on the 1,800 clean test sentences); next come beam search, checkpoint averaging and a comparison with a production model.
 
 ## 1. A working training pipeline · Done
 - Found and fixed the three original bugs: the end token was never trained, `<s>` was doubled, training diverged
@@ -13,8 +13,8 @@
 
 **Done when:** a run trains to completion without collapsing and is scored on fixed, leak-free test sets. Reached with run 4 (24.0 BLEU / 47.3 chrF on 1,800 sentences).
 
-## 2. A model worth using · In progress · run 5 training
-- Run 5: run 4's setup for 20 epochs (run 4 was still improving at 12)
+## 2. A model worth using · In progress · run 5: 26.6 BLEU
+- Run 5: run 4's setup for 20 epochs: +2.6 BLEU, every register better *(done)*
 - Fix beam search: carry finished beams forward, add length normalisation; report greedy vs beam per register
 - Checkpoint averaging (the mean of the last few epochs' weights), a cheap and usually reliable gain
 - One decoding module (`src/decode.py`) used by `translate.py`, `eval.py`, `main.py` and the Helm adapter

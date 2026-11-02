@@ -2,10 +2,11 @@
 
 A sequence-to-sequence Transformer model for Spanish-to-English translation, built from scratch in PyTorch. I started working on this project in 2024 while working through an online course on transformer-based MT models, since I wanted to try to build one of my own rather than just follow along. I picked Spanish and English since I speak both reasonably well, which makes it easier to check the outputs.
 
-**Current model: 26.6 BLEU / 49.5 chrF** across four registers (parliament, TED talks, film dialogue
-and everyday sentences; 1,800 held-out sentences), up from 10.1 for the Europarl-only model and 6.7
-for the first working retrain. It came from training on a multi-domain mix with stability fixes for
-20 epochs (October 2026, run 5).
+**Current model: 27.9 BLEU / 50.5 chrF** with beam search (26.6 / 49.5 greedy) across four registers
+(parliament, TED talks, film dialogue and everyday sentences; 1,800 held-out sentences), up from 10.1
+for the Europarl-only model and 6.7 for the first working retrain. It came from training on a
+multi-domain mix with stability fixes for 20 epochs (October 2026, run 5). For scale, Helsinki-NLP's
+production model scores 42.3 on the same sentences (see below for why that comparison flatters it).
 
 ---
 
@@ -31,7 +32,8 @@ The model is a standard encoder-decoder Transformer (the original "Attention is 
 - Mixed precision training (FP16) via `torch.cuda.amp`, about 25 minutes per epoch on a Colab T4
 - 20 epochs (~8.5 hours) with no loss spikes; validation loss fell every epoch, best at epoch 20
 
-Decoding supports greedy search and beam search (beam width = 5).
+Decoding (`src/decode.py`): batched greedy search, and beam search with width 5 and length
+normalisation (α = 1.0, chosen on the validation set, not the test set).
 
 ---
 
@@ -69,6 +71,29 @@ the stability fixes (fix 5 below): it scored about the same as retrain 3's best 
 improves on every register (+2.6 BLEU overall).
 (Greedy decoding. Retrain 1 is decoded the way it was trained, starting from `<s> <s>`.)
 
+**Decoding, and a reference point.** Run 5 on the same 1,800 sentences with greedy decoding, with
+beam search, and next to [Helsinki-NLP/opus-mt-es-en](https://huggingface.co/Helsinki-NLP/opus-mt-es-en),
+a widely used production model (beam 4, its default):
+
+| Register | Run 5 greedy | **Run 5 beam 5** | opus-mt-es-en |
+|---|---|---|---|
+| Parliament: Europarl | 20.3 | **22.0** | 36.1 |
+| Spoken: TED talks | 25.7 | **26.7** | 42.3 |
+| Dialogue: OpenSubtitles | 26.7 | **28.2** | 42.6 |
+| Everyday: Tatoeba | 45.2 | **46.5** | 58.8 |
+| **All: BLEU / chrF** | 26.6 / 49.5 | **27.9 / 50.5** | 42.3 / 62.6 |
+
+Beam search helps every register (+1.3 BLEU overall). The beam width and length penalty were tuned on
+400 validation sentences: width 4, 5 and 8 scored within 0.4 BLEU of each other, and α = 1.0 (score
+per token) beat α = 0 and 0.6.
+
+opus-mt is about 14 BLEU ahead, and that gap is an upper bound: it was trained on the full OPUS
+collection, the same corpora these test sets come from, so it has probably seen some of these exact
+sentences. It is also not flawless: for *Allison, sé mejor que nadie lo mucho que esto significa para
+usted* ("Allison, I know better than anyone…") it writes "Allison knows better than anyone", losing
+the first person that *sé* marks. Our model gets the person right there but loses the rest
+("Allison, I know how much better this means for you").
+
 ---
 
 ## What I fixed (October 2026)
@@ -102,11 +127,12 @@ I also went from 7,659 training pairs to ~104k: the original `clean.py` only rea
 │   ├── tokenizer.py      # SentencePiece wrapper
 │   ├── dataset.py        # Dataset + collate
 │   ├── train.py          # Training loop (config-driven)
-│   └── utils.py          # Greedy/beam decode, masking
+│   ├── decode.py         # Batched greedy + beam search, loading a run folder
+│   └── utils.py          # Masking helpers
 ├── configs/
 │   ├── retrain.yaml      # Run 2: Europarl only, all bug fixes
-│   ├── mix-v1.yaml       # Run 3 (current model): multi-domain mix
-│   └── mix-v2.yaml       # Run 4 (next): leak-free mix, pre-LN, spike rollback
+│   ├── mix-v1.yaml       # Run 3: multi-domain mix
+│   └── mix-v2.yaml       # Runs 4–5 (current model): leak-free mix, pre-LN, spike rollback
 ├── data/data/
 │   ├── raw/              # Europarl source files
 │   ├── processed/        # Cleaned sentence pairs (original 7,659-pair set)
@@ -118,8 +144,8 @@ I also went from 7,659 training pairs to ~104k: the original `clean.py` only rea
 │   └── full_notebook.ipynb   # Original training + eval pipeline (Colab)
 ├── main.py               # Training entry point (plain run, or --config)
 ├── build_mix.py          # Builds the multi-domain training mix
-├── translate.py          # Run inference
-├── eval.py               # BLEU evaluation
+├── translate.py          # Translate sentences or a file with a trained run
+├── eval.py               # BLEU/chrF per register, greedy vs beam
 └── prepare_data.py       # Original tokenizer training script
 ```
 
@@ -144,7 +170,17 @@ python main.py
 
 Training needs a GPU; I run it on Colab, where checkpoints and metrics are saved to Google Drive as training goes. Each run writes its checkpoint, tokenizer and test set together into `output_dir/model/`.
 
-`translate.py` and `eval.py` still use the decoders in `src/utils.py`; `greedy_batch` in `src/train.py` is the decoder used for the numbers above.
+Translating and scoring with a trained run folder (the `model/` folder a run writes):
+
+```bash
+python translate.py --model runs/local/model "Llegué tarde porque se me olvidó el despertador."
+python translate.py --model runs/local/model < spanish.txt > english.txt   # one sentence per line
+python eval.py --model runs/local/model --clean    # the 1,800 test sentences above, greedy and beam
+```
+
+Both default to beam search (width 5); `--beam 1` is greedy. Setting `average_last: 5` in a config
+also saves `averaged_transformer.pt`, the mean of the last five epochs' weights, and scores it
+beside the best checkpoint at the end of training.
 
 ---
 
@@ -181,29 +217,32 @@ subject and who told the stories. Dropped subjects (pro-drop) are still worth te
 
 **Long sentence:**
 ```
-ES: A pesar de los esfuerzos realizados durante los últimos años para mejorar la situación
-    económica de las regiones más vulnerables, los resultados han sido desiguales y aún
-    queda mucho trabajo por hacer.
-EN: Despite the efforts made to improve the economic situation in recent years, the regions have
-    been much more vulnerable, and they have still been much more vulnerable.
+ES:     A pesar de los esfuerzos realizados durante los últimos años para mejorar la situación
+        económica de las regiones más vulnerables, los resultados han sido desiguales y aún
+        queda mucho trabajo por hacer.
+Greedy: Despite the efforts made to improve the economic situation in recent years, the regions
+        have been much more vulnerable, and they have still been much more vulnerable.
+Beam:   Despite the efforts of the last few years to improve the economic situation in the regions,
+        the results have been much more vulnerable, and they have still been very vulnerable.
 ```
-The first half is now a fluent, faithful clause, but the second half loses the thread ("the results
-have been uneven and much work remains") and repeats itself. Long sentences are the clearest
+The first half is a fluent, faithful clause. Beam search finds the right subject for the second
+half ("the results have been…") where greedy made it "the regions", but both lose the thread after
+that ("uneven, and much work remains") and repeat themselves. Long sentences are the clearest
 remaining weakness.
 
 ---
 
 ## Current limitations
 
-Long sentences still lose the thread and repeat themselves.
-Beam search in `src/utils.py` keeps extending beams after they've ended, so greedy decoding gives
-cleaner output for now. The model is trained on TED2020 (CC BY-NC-ND) and OpenSubtitles (research
-use), so it's for non-commercial use.
+Long sentences still lose the thread and repeat themselves, with greedy decoding and with beam
+search. The model is about 14 BLEU behind a production model of similar size trained on far more
+data. It is trained on TED2020 (CC BY-NC-ND) and OpenSubtitles (research use), so it's for
+non-commercial use.
 
 ---
 
 ## What's next
 
-The plan is in [ROADMAP.md](ROADMAP.md): finish run 4 and fix beam search, publish the model with a
+The plan is in [ROADMAP.md](ROADMAP.md): a run with checkpoint averaging, publish the model with a
 browser demo on Hugging Face, and a linguistic evaluation (a challenge set of Spanish phenomena such
 as pro-drop, *se* constructions, *ser/estar* and false friends, plus an error analysis).

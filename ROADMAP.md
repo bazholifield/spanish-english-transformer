@@ -2,7 +2,7 @@
 
 **Goal:** a Spanish→English translator, built from scratch, that someone else can actually use, plus an honest linguist's account of what it gets right and where it fails.
 
-**Now:** run 5 is the best model yet (26.6 BLEU / 49.5 chrF on the 1,800 clean test sentences); next come beam search, checkpoint averaging and a comparison with a production model.
+**Now:** with the fixed beam search, run 5 scores 27.9 BLEU / 50.5 chrF (opus-mt: 42.3 on the same sentences); milestone 2's bar is met, and checkpoint averaging is built and waits for a run 6 on Colab.
 
 ## 1. A working training pipeline · Done
 - Found and fixed the three original bugs: the end token was never trained, `<s>` was doubled, training diverged
@@ -13,18 +13,19 @@
 
 **Done when:** a run trains to completion without collapsing and is scored on fixed, leak-free test sets. Reached with run 4 (24.0 BLEU / 47.3 chrF on 1,800 sentences).
 
-## 2. A model worth using · In progress · run 5: 26.6 BLEU
+## 2. A model worth using · In progress · run 5 + beam: 27.9 BLEU
 - Run 5: run 4's setup for 20 epochs: +2.6 BLEU, every register better *(done)*
-- Fix beam search: carry finished beams forward, add length normalisation; report greedy vs beam per register
-- Checkpoint averaging (the mean of the last few epochs' weights), a cheap and usually reliable gain
-- One decoding module (`src/decode.py`) used by `translate.py`, `eval.py`, `main.py` and the Helm adapter
-- Reference point: score `Helsinki-NLP/opus-mt-es-en` on the same test sets, to state the gap honestly
+- Fixed beam search: finished hypotheses set aside, length normalisation (α 1.0, tuned on validation); +1.3 BLEU over greedy, better on all four registers *(done)*
+- One decoding module (`src/decode.py`) used by `translate.py`, `eval.py`, `main.py` and the Helm adapter; the encoder now runs once per sentence (3.5× faster greedy) *(done)*
+- Reference point: `Helsinki-NLP/opus-mt-es-en` scores 42.3 / 62.6 on the same 1,800 sentences, an upper bound since it was trained on the same OPUS corpora *(done)*
+- Checkpoint averaging: `average_last: N` saves the mean of the last N epochs and scores it beside the best checkpoint *(built; needs a run)*
+- Run 6: run 5's config with `average_last: 5`, to measure averaging (one Colab session)
 - Optional, if Colab time allows: more data per register, back-translation, or a wider model
 
 **Done when:** beam search scores at least as well as greedy on every register, and the README's results table shows the best run against runs 1–4 and opus-mt on the same sentences.
 
 ## 3. Usable by anyone · Next
-- `translate.py` loads any run folder (architecture and token ids come from the checkpoint) and translates a sentence, a file or stdin
+- `translate.py` loads any run folder (architecture and token ids come from the checkpoint) and translates a sentence, a file or stdin *(done for runs from October 2026 on)*
 - A small Python API: `Translator("path").translate(["..."])`
 - The model on the Hugging Face Hub with a model card: data, results per register, known failure modes, licence limits
 - A Gradio demo on Hugging Face Spaces: translate, colour tokens by model confidence, show opus-mt's translation beside it

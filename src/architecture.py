@@ -60,6 +60,21 @@ class TransformerSeq2Seq(nn.Module):
         logits = self.fc_out(out)  # (batch, tgt_len, vocab)
         return logits
 
+    # Inference in two halves, so decoding runs the encoder once per sentence instead of once per
+    # generated token. Together they compute exactly what forward() does.
+    def encode(self, src):
+        src_pad_mask = src == self.pad_idx
+        memory = self.transformer.encoder(self.pos_encoder(self.src_tok_emb(src) * math.sqrt(self.d_model)),
+                                          src_key_padding_mask=src_pad_mask)
+        return memory, src_pad_mask
+
+    def decode_step(self, tgt, memory, src_pad_mask):
+        """Logits for the next token after each prefix in `tgt` (batch, tgt_len) → (batch, vocab)."""
+        tgt_mask = torch.triu(torch.ones((tgt.size(1), tgt.size(1)), device=tgt.device), diagonal=1).bool()
+        out = self.transformer.decoder(self.pos_encoder(self.tgt_tok_emb(tgt) * math.sqrt(self.d_model)), memory,
+                                       tgt_mask=tgt_mask, memory_key_padding_mask=src_pad_mask)
+        return self.fc_out(out[:, -1])
+
 
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, dropout=0.1, max_len=5000):

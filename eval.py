@@ -1,81 +1,65 @@
-import torch
+"""Score a trained run on the four fixed per-register test sets, with greedy decoding and beam search.
+
+    python eval.py --model runs/local/model             # all 2,000 test sentences
+    python eval.py --model runs/local/model --clean     # the 1,800 used in the README (see fix 4)
+"""
+import argparse
+from pathlib import Path
+
 import sacrebleu
-import os
-from src.architecture import TransformerSeq2Seq
-from src.tokenizer import SPTokenizer
-from src.utils import greedy_decode
+import torch
 
-def load_test_data(en_path, es_path, max_samples=200):
-    """Loads the parallel corpus and returns the test slice."""
-    with open(en_path, 'r', encoding='utf-8') as f_en, \
-         open(es_path, 'r', encoding='utf-8') as f_es:
-        en_lines = [line.strip() for line in f_en]
-        es_lines = [line.strip() for line in f_es]
+from build_mix import norm
+from src.decode import beam_search, greedy_batch, load_model
 
-    test_en = en_lines[-max_samples:]
-    test_es = es_lines[-max_samples:]
-    return test_en, test_es
+EVAL = Path("data/data/mix-v2/eval")
+LEAKED_INTO = Path("data/data/mix-v1/pools")  # run 3's training data held the English of ~200 test pairs
 
-def run_evaluation():
+
+def load_sets(clean):
+    seen = set()
+    if clean:
+        for f in LEAKED_INTO.glob("*.en"):
+            seen.update(norm(line) for line in f.read_text(encoding="utf-8").splitlines())
+    sets = {}
+    for es_file in sorted(EVAL.glob("*.es")):
+        pairs = zip(es_file.read_text(encoding="utf-8").splitlines(),
+                    es_file.with_suffix(".en").read_text(encoding="utf-8").splitlines())
+        pairs = [(es, en) for es, en in pairs if norm(en) not in seen]
+        sets[es_file.stem] = ([es for es, _ in pairs], [en for _, en in pairs])
+    return sets
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--model", required=True, help="run folder with best_transformer.pt and spm_shared.model")
+    ap.add_argument("--clean", action="store_true", help="drop the ~200 test pairs whose English leaked into mix-v1")
+    ap.add_argument("--beam", type=int, default=5, help="beam width (0 = greedy only)")
+    ap.add_argument("--alpha", type=float, default=1.0)
+    ap.add_argument("--limit", type=int, default=0, help="first N sentences per register (0 = all)")
+    args = ap.parse_args()
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model, tok = load_model(args.model, device)
+    sets = load_sets(args.clean)
+    if args.limit:
+        sets = {k: (es[:args.limit], en[:args.limit]) for k, (es, en) in sets.items()}
+    decoders = {"greedy": lambda s: greedy_batch(model, s, tok, device)}
+    if args.beam:
+        decoders[f"beam {args.beam}"] = lambda s: beam_search(model, s, tok, device, beam=args.beam, alpha=args.alpha)
 
-    sp_path = os.path.join("models", "models", "spm_shared.model")
-    if not os.path.exists(sp_path):
-        raise FileNotFoundError(f"Tokenizer not found at {sp_path}")
+    for name, decode in decoders.items():
+        all_hyps, all_refs = [], []
+        print(f"\n{name}:")
+        for register, (es, refs) in sets.items():
+            hyps = decode(es)
+            print(f"  {register:10} ({len(es)}): BLEU {sacrebleu.corpus_bleu(hyps, [refs]).score:5.2f}  "
+                  f"chrF {sacrebleu.corpus_chrf(hyps, [refs]).score:5.2f}", flush=True)
+            all_hyps += hyps
+            all_refs += refs
+        print(f"  {'all':10} ({len(all_refs)}): BLEU {sacrebleu.corpus_bleu(all_hyps, [all_refs]).score:5.2f}  "
+              f"chrF {sacrebleu.corpus_chrf(all_hyps, [all_refs]).score:5.2f}")
 
-    tokenizer = SPTokenizer(sp_path)
-    src_tok = tgt_tok = tokenizer
-
-    model = TransformerSeq2Seq(
-        src_vocab_size=src_tok.vocab_size(),
-        tgt_vocab_size=tgt_tok.vocab_size(),
-        d_model=512,
-        nhead=8,
-        num_encoder_layers=6,
-        num_decoder_layers=6,
-        dim_feedforward=2048,
-        dropout=0.0,
-        pad_idx=src_tok.id_pad
-    ).to(device)
-
-    checkpoint_path = os.path.join("models", "models", "best_transformer.pt")
-    if os.path.exists(checkpoint_path):
-        checkpoint = torch.load(checkpoint_path, map_location=device)
-        model.load_state_dict(checkpoint['model_state'])
-        print(f"Loaded checkpoint from {checkpoint_path}")
-    else:
-        print("Warning: No checkpoint found! BLEU score will be near zero.")
-
-    test_en, test_es = load_test_data(
-        os.path.join("data", "data", "processed", "all_en.txt"),
-        os.path.join("data", "data", "processed", "all_es.txt"),
-        max_samples=200
-    )
-
-    refs = []
-    hyps = []
-
-    print(f"Running evaluation on {len(test_es)} samples...")
-    model.eval()
-    with torch.no_grad():
-        for i in range(len(test_es)):
-            src = test_es[i]
-            tgt = test_en[i]
-
-            src_ids = torch.tensor(src_tok.encode(src), dtype=torch.long).to(device)
-            pred = greedy_decode(model, src_ids, src_tok, tgt_tok, device=device)[0]
-
-            refs.append(tgt)
-            hyps.append(pred)
-
-            if (i + 1) % 50 == 0:
-                print(f"Processed {i + 1}/{len(test_es)}...")
-
-    # sacrebleu expects references as a list of corpora: [list_of_refs]
-    bleu = sacrebleu.corpus_bleu(hyps, [refs])
-    print("\n" + "="*30)
-    print(f"FINAL BLEU SCORE: {bleu.score:.2f}")
-    print("="*30)
 
 if __name__ == "__main__":
-    run_evaluation()
+    main()

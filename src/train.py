@@ -1,4 +1,5 @@
 import os, math, shutil, time
+from collections import deque
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -6,6 +7,7 @@ from torch.utils.data import DataLoader
 from .architecture import TransformerSeq2Seq
 from .tokenizer import SPTokenizer
 from .dataset import Seq2SeqDataset, collate_fn
+from .decode import greedy_batch
 
 def teacher_forcing(tgt_batch):
     """Split encoded targets [<s>, w1 … wn, </s>] into decoder input [<s>, w1 … wn] and labels
@@ -100,34 +102,9 @@ DEFAULTS = {
     "spike_factor": 0.0,         # val loss > best × this (or NaN) → roll back to the best checkpoint (0 = off)
     "max_rollbacks": 3,          # give up after this many rollbacks
     "report_every": 500,         # steps between stability records to the Helm (0 = off)
+    "average_last": 0,           # also save the mean of the last N epochs' weights (0 = off; ~275 MB RAM each)
     "save_dir": os.path.join("models", "models"),
 }
-
-
-@torch.no_grad()
-def greedy_batch(model, sentences, tok, device, max_len=None, batch_size=64):
-    """Greedy-decode a list of sentences in batches, cutting each output at its own </s>."""
-    model.eval()
-    out = []
-    for i in range(0, len(sentences), batch_size):
-        chunk = [tok.encode(s) for s in sentences[i:i + batch_size]]
-        src = torch.full((len(chunk), max(map(len, chunk))), tok.id_pad, dtype=torch.long)
-        for j, ids in enumerate(chunk):
-            src[j, :len(ids)] = torch.tensor(ids)
-        src = src.to(device)
-        gen = torch.full((len(chunk), 1), tok.id_bos, dtype=torch.long, device=device)
-        limit = max_len or (2 * src.size(1) + 10)
-        for _ in range(limit):
-            logits = model(src, gen)[:, -1]
-            logits[:, [tok.id_bos, tok.id_pad]] = float("-inf")  # never valid as output tokens
-            nxt = logits.argmax(-1, keepdim=True)
-            gen = torch.cat([gen, nxt], dim=1)
-            if (gen == tok.id_eos).any(dim=1).all():
-                break
-        for row in gen.tolist():
-            row = row[1:]
-            out.append(tok.decode(row[:row.index(tok.id_eos)] if tok.id_eos in row else row))
-    return out
 
 
 def run_training(src_sentences_train, tgt_sentences_train,
@@ -194,6 +171,7 @@ def run_training(src_sentences_train, tgt_sentences_train,
     best_val = float('inf')
     stale = 0  # epochs since the last new best
     rollbacks = 0
+    recent = deque(maxlen=cfg["average_last"] or 1)  # CPU copies of the last epochs' weights
     for epoch in range(1, N_EPOCHS + 1):
         t0 = time.time()
         train_loss = train_epoch(model, train_loader, optimizer, criterion, device, bos_idx, scaler, scheduler,
@@ -229,6 +207,7 @@ def run_training(src_sentences_train, tgt_sentences_train,
                 print(f" ! Val loss {val_loss:.4f} vs best {best_val:.4f} at epoch {epoch}: rolled back to epoch "
                       f"{best['epoch']}, learning rate ×{lr_mult[0]:g} (rollback {rollbacks}/{cfg['max_rollbacks']}).")
                 emit({"event": "rollback", "step": step, "epoch": epoch, "to_epoch": best["epoch"], "lr_mult": lr_mult[0]})
+                recent.clear()  # the weights just jumped back; don't average across the jump
                 stale += 1  # a rolled-back epoch is an epoch without improvement
                 if cfg["early_stop_patience"] and stale >= cfg["early_stop_patience"]:
                     print(f" > No improvement for {stale} epochs; stopping early (best val loss {best_val:.4f}).")
@@ -238,6 +217,9 @@ def run_training(src_sentences_train, tgt_sentences_train,
             print(f" ! Training diverged at epoch {epoch}; stopping. Best val loss was {best_val:.4f}.")
             emit({"event": "diverged", "step": step, "epoch": epoch})
             break
+
+        if cfg["average_last"]:
+            recent.append((epoch, {k: v.detach().to("cpu", copy=True) for k, v in model.state_dict().items()}))
 
         if val_loss < best_val:
             best_val = val_loss
@@ -261,5 +243,21 @@ def run_training(src_sentences_train, tgt_sentences_train,
                 print(f" > No improvement for {stale} epochs; stopping early (best val loss {best_val:.4f}).")
                 emit({"event": "early_stop", "step": step, "epoch": epoch})
                 break
+
+    if len(recent) >= 2:
+        # Checkpoint averaging: the mean of the last few epochs' weights usually sits in a flatter,
+        # better spot than any single epoch, for free. Saved beside the best checkpoint, not over it.
+        epochs = [e for e, _ in recent]
+        averaged = {k: (sum(sd[k].float() for _, sd in recent) / len(recent)).to(v.dtype) if v.is_floating_point() else v
+                    for k, v in recent[-1][1].items()}
+        model.load_state_dict(averaged)
+        val_loss = evaluate(model, val_loader, criterion, device, bos_idx)
+        avg_path = os.path.join(save_dir, "averaged_transformer.pt")
+        torch.save({'model_state': averaged, 'epoch': epochs[-1], 'averaged_epochs': epochs, 'val_loss': val_loss,
+                    'special_ids': {'pad': pad_idx, 'bos': bos_idx, 'eos': eos_idx}, 'arch': arch,
+                    'decoder_input': 'standard'}, avg_path)
+        print(f" > Averaged epochs {epochs[0]}-{epochs[-1]}: val loss {val_loss:.4f} (best single epoch {best_val:.4f}), "
+              f"saved to {avg_path}")
+        emit({"event": "averaged", "epochs": epochs, "eval_loss_averaged": val_loss, "file": avg_path})
 
     return model, src_tok, tgt_tok

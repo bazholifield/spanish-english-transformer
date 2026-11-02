@@ -5,7 +5,8 @@ from pathlib import Path
 
 import torch
 
-from src.train import greedy_batch, run_training
+from src.decode import greedy_batch
+from src.train import run_training
 
 
 def load_parallel_corpus(en_path, es_path):
@@ -180,7 +181,7 @@ def run_from_config(path):
                                      "dim_feedforward", "dropout", "batch_size", "epochs", "warmup_steps",
                                      "label_smoothing", "bleu_every", "bleu_sentences", "lr_scale",
                                      "early_stop_patience", "norm_first", "spike_factor", "max_rollbacks",
-                                     "report_every") if k in cfg}
+                                     "report_every", "average_last") if k in cfg}
     train_cfg["save_dir"] = model_dir
     run_training(
         src_sentences_train=[es for es, _ in train], tgt_sentences_train=[en for _, en in train],
@@ -195,27 +196,31 @@ def run_from_config(path):
     from src.train import emit
 
     tok = SPTokenizer(os.path.join(model_dir, "spm_shared.model"))
-    ckpt = torch.load(os.path.join(model_dir, "best_transformer.pt"), map_location=device)
-    model = TransformerSeq2Seq(tok.vocab_size(), tok.vocab_size(), dropout=0.0, pad_idx=tok.id_pad, **ckpt["arch"]).to(device)
-    model.load_state_dict(ckpt["model_state"])
     if not eval_sets:
         eval_sets = {"test": ([es for es, _ in test], [en for _, en in test])}
-    record, all_hyps, all_refs = {"step": ckpt["epoch"]}, [], []
-    print(f"\nBest epoch {ckpt['epoch']}, greedy decoding:")
-    for name, (es, refs) in eval_sets.items():
-        hyps = greedy_batch(model, es, tok, device)
-        bleu, chrf = sacrebleu.corpus_bleu(hyps, [refs]).score, sacrebleu.corpus_chrf(hyps, [refs]).score
-        print(f"  {name:10} ({len(es)} sentences): BLEU {bleu:.2f}  chrF {chrf:.2f}")
-        if len(eval_sets) > 1:
-            record[f"test_bleu_{name}"], record[f"test_chrf_{name}"] = bleu, chrf
-        all_hyps += hyps
-        all_refs += refs
-        for s, hyp, ref in list(zip(es, hyps, refs))[:2]:
-            print(f"    ES  {s}\n    OUT {hyp}\n    REF {ref}\n")
-    record["test_bleu"] = sacrebleu.corpus_bleu(all_hyps, [all_refs]).score
-    record["test_chrf"] = sacrebleu.corpus_chrf(all_hyps, [all_refs]).score
-    print(f"  overall: BLEU {record['test_bleu']:.2f}  chrF {record['test_chrf']:.2f}")
-    emit(record)
+    # The best checkpoint is the run's result; an averaged one (average_last) is scored beside it as "_avg".
+    for file, suffix in (("best_transformer.pt", ""), ("averaged_transformer.pt", "_avg")):
+        if not os.path.exists(os.path.join(model_dir, file)):
+            continue
+        ckpt = torch.load(os.path.join(model_dir, file), map_location=device)
+        model = TransformerSeq2Seq(tok.vocab_size(), tok.vocab_size(), dropout=0.0, pad_idx=tok.id_pad, **ckpt["arch"]).to(device)
+        model.load_state_dict(ckpt["model_state"])
+        record, all_hyps, all_refs = {"step": ckpt["epoch"]}, [], []
+        print(f"\n{'Averaged epochs ' + str(ckpt['averaged_epochs']) if suffix else 'Best epoch ' + str(ckpt['epoch'])}, greedy decoding:")
+        for name, (es, refs) in eval_sets.items():
+            hyps = greedy_batch(model, es, tok, device)
+            bleu, chrf = sacrebleu.corpus_bleu(hyps, [refs]).score, sacrebleu.corpus_chrf(hyps, [refs]).score
+            print(f"  {name:10} ({len(es)} sentences): BLEU {bleu:.2f}  chrF {chrf:.2f}")
+            if len(eval_sets) > 1:
+                record[f"test_bleu_{name}{suffix}"], record[f"test_chrf_{name}{suffix}"] = bleu, chrf
+            all_hyps += hyps
+            all_refs += refs
+            for s, hyp, ref in list(zip(es, hyps, refs))[:2 if not suffix else 0]:
+                print(f"    ES  {s}\n    OUT {hyp}\n    REF {ref}\n")
+        record[f"test_bleu{suffix}"] = sacrebleu.corpus_bleu(all_hyps, [all_refs]).score
+        record[f"test_chrf{suffix}"] = sacrebleu.corpus_chrf(all_hyps, [all_refs]).score
+        print(f"  overall: BLEU {record[f'test_bleu{suffix}']:.2f}  chrF {record[f'test_chrf{suffix}']:.2f}")
+        emit(record)
 
 
 if __name__ == "__main__":

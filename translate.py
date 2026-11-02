@@ -1,60 +1,33 @@
+"""Translate Spanish to English with a trained run (beam search by default).
+
+    python translate.py --model runs/local/model "Llegué tarde porque se me olvidó el despertador."
+    python translate.py --model runs/local/model < spanish.txt > english.txt
+"""
+import argparse
+import sys
+
 import torch
-import os
-from src.architecture import TransformerSeq2Seq
-from src.tokenizer import SPTokenizer
-from src.utils import beam_search_decode
 
-def translate():
-    # Set up device
+from src.decode import beam_search, greedy_batch, load_model
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("sentences", nargs="*", help="Spanish sentences (default: one per line from stdin)")
+    ap.add_argument("--model", required=True, help="run folder with best_transformer.pt and spm_shared.model")
+    ap.add_argument("--beam", type=int, default=5, help="beam width (1 = greedy)")
+    ap.add_argument("--alpha", type=float, default=1.0, help="length normalisation for beam search (tuned on validation)")
+    args = ap.parse_args()
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    # Load tokenizer
-    sp = SPTokenizer(os.path.join("models", "models", "spm_shared.model"))
-    src_tok = tgt_tok = sp 
-
-    # Initialize and load model (check hyperparameters - same as training loop!)
-    model = TransformerSeq2Seq(
-        src_vocab_size=src_tok.vocab_size(),
-        tgt_vocab_size=tgt_tok.vocab_size(),
-        d_model=512, nhead=8, num_encoder_layers=6, num_decoder_layers=6,
-        dim_feedforward=2048, dropout=0.0, # Dropout 0 for inference
-        pad_idx=src_tok.id_pad
-    ).to(device)
-
-    checkpoint_path = os.path.join("models", "models", "best_transformer.pt")
-    if os.path.exists(checkpoint_path):
-        checkpoint = torch.load(checkpoint_path, map_location=device)
-        model.load_state_dict(checkpoint['model_state'])
-        print(f"Loaded model from {checkpoint_path}")
+    model, tok = load_model(args.model, device)
+    sentences = args.sentences or [line.strip() for line in sys.stdin if line.strip()]
+    if args.beam > 1:
+        out = beam_search(model, sentences, tok, device, beam=args.beam, alpha=args.alpha)
     else:
-        print("Warning: No checkpoint found. Using unitialized model (will output gibberish).")
+        out = greedy_batch(model, sentences, tok, device)
+    print("\n".join(out))
 
-    model.eval()
-
-    # translation loop
-    test_sentences_es = [
-        "Ella se fue a la tienda por la mañana.",
-        "¿Podrías ayudarme con este ejercicio de PyTorch?",
-        "Me encanta programar en Python.",
-        "El sol es caliente y el cielo es azul."
-    ]
-
-    print("\n--- Translation Results ---\n")
-    with torch.no_grad():
-        for src in test_sentences_es:
-            try:
-                # encode source text to tensor
-                src_ids = torch.tensor(src_tok.encode(src), dtype=torch.long).to(device)
-
-                # beam decode
-                pred = beam_search_decode(model, src_ids, src_tok, tgt_tok, beam_width=5, device=device)
-
-                print(f"Source (ES): {src}")
-                print(f"Prediction (EN): {pred}")
-                print("-" * 30)
-
-            except Exception as e:
-                print(f"❌ ERROR translating: {src}. Details: {e}")
 
 if __name__ == "__main__":
-    translate()
+    main()

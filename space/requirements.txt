@@ -1,0 +1,7 @@
+# Gradio itself comes from sdk_version in README.md. CPU-only torch keeps the image small:
+# the default torch wheel bundles ~2 GB of CUDA libraries a free CPU Space can't use.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.12.1
+sentencepiece==0.2.1
+transformers==5.12.1
+sacremoses==0.1.1

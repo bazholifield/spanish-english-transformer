@@ -1,0 +1,61 @@
+{
+ "_how": "3 random sentences per register (random.Random(7), 6-18 words) from the 1,800 clean test pairs eval.py --clean scores; not hand-picked",
+ "registers": {
+  "Everyday": [
+   {
+    "es": "¡No sé cómo demostrarlo, ya que es tan evidente!",
+    "en": "I don't know how to demonstrate it, since it's too obvious!"
+   },
+   {
+    "es": "Él va a escribir una carta.",
+    "en": "He is going to write a letter."
+   },
+   {
+    "es": "¡No dejes que ese perro se me acerque!",
+    "en": "Don't let that dog come near me!"
+   }
+  ],
+  "Film dialogue": [
+   {
+    "es": "Y arrojaron los chalecos salvavidas en el bote de goma, y se lo mandaron a usted.",
+    "en": "And they threw the life jackets into the dinghy and sent that out to you."
+   },
+   {
+    "es": "Bueno, ¿sabes cómo Escarabajo Azul podría derrotar a Estrella Maligna?",
+    "en": "Yeah, well, do you have any clue how Beetle would take down Evil Star?"
+   },
+   {
+    "es": "Si hubieras confiado en ella desde el principio, todo estaría bien.",
+    "en": "If you trusted her from the beginning, everything would be fine."
+   }
+  ],
+  "TED talks": [
+   {
+    "es": "En el contexto de la educación, es muy difícil ver resultados rápidamente.",
+    "en": "In the context of education, it's very difficult to see results quickly."
+   },
+   {
+    "es": "Y supieron despertarme justo a tiempo para el último aliento de mi madre.",
+    "en": "And they knew to come and wake me up just in time for my mom's last breath."
+   },
+   {
+    "es": "Les mostraré un ejemplo de Brasil.",
+    "en": "I'll show you an example of Brazil."
+   }
+  ],
+  "Parliament": [
+   {
+    "es": "Además, tiene una sistemática más aceptable y es más clara y transparente.",
+    "en": "Furthermore, it contains more acceptable systematics and is clearer and more transparent."
+   },
+   {
+    "es": "Es un año de pleno aprovechamiento de las previsiones contenidas en las perspectivas financieras.",
+    "en": "It is a year in which the forecasts contained in the financial perspectives can be fully achieved."
+   },
+   {
+    "es": "Otra cosa que debemos recordar es que en el pasado sí que tuvimos una línea presupuestaria.",
+    "en": "The other thing we should remember is that we did have a budget line in the past."
+   }
+  ]
+ }
+}

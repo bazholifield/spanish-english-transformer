@@ -1,0 +1,2 @@
+# GitHub's language bar: count notebooks as documentation, so the repo shows as the Python it is.
+*.ipynb linguist-documentation

@@ -13,3 +13,5 @@ models/**/*.pth
 checkpoints/*.pt
 checkpoints/*.pth
 notebooks/*
+# Hugging Face Space build (space/build.py; weights are too big for git)
+space/build/

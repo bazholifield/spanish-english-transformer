@@ -4,8 +4,6 @@ An encoder-decoder Transformer for Spanish to English, built and trained from sc
 chose the pair because I speak both, so I can judge the output myself, not only by BLEU.
 
 **27.9 BLEU / 50.5 chrF** with beam search on 1,800 held-out sentences from four registers.
-**[Try it in your browser](https://huggingface.co/spaces/bazholifield/spanish-english-transformer)**:
-my model next to Helsinki-NLP's production model on any Spanish you type.
 
 ## Results
 
@@ -91,8 +89,8 @@ python eval.py --model <run>/model --clean           # the 1,800 sentences above
 ```
 
 Training needs a GPU (I use Colab); translating and scoring run on a CPU. `average_last: 5` in a
-config also saves the average of the last five epochs' weights. `space/` builds the browser demo
-(`python space/build.py --model <run>/model`).
+config also saves the average of the last five epochs' weights. `space/` builds a Gradio demo
+(`python space/build.py --model <run>/model`, then `python space/build/app.py` to run it locally).
 
 **Licence:** the code is MIT ([LICENSE](LICENSE)). The model was trained on TED2020 (CC BY-NC-ND)
 and OpenSubtitles (research use), so the trained weights are for non-commercial use. Next steps, including a challenge set of Spanish phenomena (pro-drop, *se*

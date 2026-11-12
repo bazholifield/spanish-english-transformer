@@ -2,7 +2,7 @@
 
 **Goal:** a Spanish-to-English translator, built from scratch, that someone else can actually use, plus an honest linguist's account of what it gets right and where it fails.
 
-**Now:** with the fixed beam search, run 5 scores 27.9 BLEU / 50.5 chrF (opus-mt: 42.3 on the same sentences); milestone 2's bar is met, and checkpoint averaging is built and waits for a run 6 on Colab. The live demo (`space/`) is built and ready to upload.
+**Now:** with the fixed beam search, run 5 scores 27.9 BLEU / 50.5 chrF (opus-mt: 42.3 on the same sentences); milestone 2's bar is met, and checkpoint averaging is built and waits for a run 6 on Colab. The Gradio demo (`space/`) is built and runs locally; it isn't hosted, because Hugging Face now charges for Gradio Spaces (Nov 2026).
 
 ## 1. A working training pipeline · Done
 - Found and fixed the three original bugs: the end token was never trained, `<s>` was doubled, training diverged
@@ -28,7 +28,7 @@
 - `translate.py` loads any run folder (architecture and token ids come from the checkpoint) and translates a sentence, a file or stdin *(done for runs from October 2026 on)*
 - A small Python API: `Translator("path").translate(["..."])`
 - The model on the Hugging Face Hub with a model card: data, results per register, known failure modes, licence limits *(the Space's README is the card for now; the weights ship inside the Space)*
-- A Gradio demo on Hugging Face Spaces: translate, colour tokens by model confidence, show opus-mt's translation beside it *(built Nov 2026 in `space/`: beam, greedy and opus-mt side by side, three random test sentences per register; tested in a replica of the Space's environment; to upload. Confidence colouring later)*
+- A Gradio demo on Hugging Face Spaces: translate, colour tokens by model confidence, show opus-mt's translation beside it *(built Nov 2026 in `space/`: beam, greedy and opus-mt side by side, three random test sentences per register; tested in a replica of the Space's environment. Not hosted: Gradio Spaces need a paid plan since Nov 2026, so the options are paying, running the model in the browser (ONNX), or a free host. Confidence colouring later)*
 - Optional: int8/ONNX export with CPU latency numbers, for an offline phone or desktop app
 
 **Done when:** a stranger can translate in the browser without installing anything, and `python translate.py "Llegué tarde porque se me olvidó el despertador."` works from a fresh clone with the published model.
